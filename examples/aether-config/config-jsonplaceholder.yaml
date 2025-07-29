@@ -1,0 +1,21 @@
+# Aether Configuration Example
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+  log_level: "info"
+
+# Define APIs to expose
+apis:
+  jsonplaceholder:
+    base_url: "https://jsonplaceholder.typicode.com"
+    openapi_spec: "examples/openapi/jsonplaceholder-openapi.yaml"
+    timeout: 30
+  
+  # httpbin:
+  #   base_url: "https://httpbin.org"
+  #   openapi_spec: "examples/httpbin-openapi.yaml"
+  #   timeout: 15
+
+# Tool-specific configurations and overrides
+tools: {}

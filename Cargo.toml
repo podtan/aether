@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "aether-core",
+    "aether-mcp", 
+    "aether-api",
+    "aether-config",
+    "aether-auth",
+    "aether-bin"
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+reqwest = { version = "0.11", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror = "1.0"
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = "1.0"
+futures = "0.3"
+dotenv = "0.15"
+tokio-util = "0.7"
+async-trait = "0.1"
+rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client"] }
+tokio-stream = "0.1"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Aether Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/AAG81/aether"
+description = "A Rust-based application for dynamically exposing external RESTful APIs as Model Context Protocol (MCP) endpoints"

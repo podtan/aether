@@ -1,0 +1,36 @@
+[[bin]]
+name = "debug_client"
+path = "src/debug_client.rs"
+
+[package]
+name = "aether-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server implementation for Aether"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+aether-config = { path = "../aether-config" }
+aether-api = { path = "../aether-api" }
+aether-auth = { path = "../aether-auth" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+hyper = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
+rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
+tokio-stream = "0.1"
+
+[dev-dependencies]
+rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
+reqwest = { version = "0.11", features = ["json"] }

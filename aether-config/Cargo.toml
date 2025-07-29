@@ -1,0 +1,16 @@
+[package]
+name = "aether-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configuration management for Aether"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

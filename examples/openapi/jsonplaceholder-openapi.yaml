@@ -1,0 +1,137 @@
+openapi: 3.0.0
+info:
+  title: JSONPlaceholder API
+  description: Fake Online REST API for Testing and Prototyping
+  version: 1.0.0
+  
+servers:
+  - url: https://jsonplaceholder.typicode.com
+    description: JSONPlaceholder server
+
+paths:
+  /posts:
+    get:
+      operationId: getPosts
+      summary: Get all posts
+      description: Retrieve a list of all posts
+      parameters:
+        - name: userId
+          in: query
+          description: Filter by user ID
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of posts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Post'
+    post:
+      operationId: createPost
+      summary: Create a new post
+      description: Create a new post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                body:
+                  type: string
+                userId:
+                  type: integer
+              required:
+                - title
+                - body
+                - userId
+      responses:
+        '201':
+          description: Post created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+
+  /posts/{id}:
+    get:
+      operationId: getPost
+      summary: Get a specific post
+      description: Retrieve a specific post by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Post ID
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: The requested post
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        '404':
+          description: Post not found
+
+  /users:
+    get:
+      operationId: getUsers
+      summary: Get all users
+      description: Retrieve a list of all users
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+
+components:
+  schemas:
+    Post:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        body:
+          type: string
+        userId:
+          type: integer
+      required:
+        - id
+        - title
+        - body
+        - userId
+        
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        website:
+          type: string
+      required:
+        - id
+        - name
+        - username
+        - email

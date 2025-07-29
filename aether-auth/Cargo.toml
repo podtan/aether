@@ -1,0 +1,15 @@
+[package]
+name = "aether-auth"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Authentication handling for Aether"
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }

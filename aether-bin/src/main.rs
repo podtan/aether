@@ -1,0 +1,162 @@
+//! Aether - Dynamic API to MCP Bridge
+//! 
+//! A Rust-based application for dynamically exposing external RESTful APIs
+//! as Model Context Protocol (MCP) endpoints.
+
+use aether_config::AetherConfig;
+use aether_mcp::server;
+use clap::{Arg, Command};
+use std::path::PathBuf;
+use tracing::{error, info};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use dotenv;
+use std::net::SocketAddr;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load environment variables from .env file if it exists
+    if let Err(e) = dotenv::dotenv() {
+        // It's okay if .env file doesn't exist, just log it at debug level
+        eprintln!("Note: .env file not found or could not be loaded: {}", e);
+    }
+    
+    // Parse command line arguments
+    let matches = Command::new("aether")
+        .version(env!("CARGO_PKG_VERSION"))
+        .about("Dynamic API to MCP Bridge")
+        .arg(
+            Arg::new("config")
+                .short('c')
+                .long("config")
+                .value_name("FILE")
+                .help("Configuration file path")
+                .default_value("config.yaml")
+        )
+        .arg(
+            Arg::new("log-level")
+                .long("log-level")
+                .value_name("LEVEL")
+                .help("Log level (trace, debug, info, warn, error)")
+                .default_value("info")
+        )
+        .arg(
+            Arg::new("port")
+                .short('p')
+                .long("port")
+                .value_name("PORT")
+                .help("HTTP server port")
+                .default_value("8000")
+        )
+        .arg(
+            Arg::new("host")
+                .long("host")
+                .value_name("HOST")
+                .help("HTTP server host")
+                .default_value("127.0.0.1")
+        )
+        .arg(
+            Arg::new("stdio")
+                .long("stdio")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use stdio transport instead of HTTP")
+        )
+        .get_matches();
+    
+    // Initialize logging
+    let log_level = matches.get_one::<String>("log-level").unwrap();
+    let log_filter = match log_level.as_str() {
+        "trace" => tracing::Level::TRACE,
+        "debug" => tracing::Level::DEBUG,
+        "info" => tracing::Level::INFO,
+        "warn" => tracing::Level::WARN,
+        "error" => tracing::Level::ERROR,
+        _ => {
+            eprintln!("Invalid log level: {}", log_level);
+            std::process::exit(1);
+        }
+    };
+    
+    // Check if stdio mode is requested (determine early for logging setup)
+    let use_stdio = matches.get_flag("stdio");
+    
+    if use_stdio {
+        // In stdio mode, all logs must go to stderr to avoid interfering with JSON-RPC on stdout
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| {
+                        tracing_subscriber::EnvFilter::new(format!("aether_core={},aether_config={},aether_api={},aether_auth={},aether_mcp={},aether_bin={}", 
+                            log_level, log_level, log_level, log_level, log_level, log_level))
+                    })
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .with_writer(std::io::stderr)
+            )
+            .init();
+    } else {
+        // HTTP mode - normal logging to stdout
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| {
+                        tracing_subscriber::EnvFilter::new(format!("aether_core={},aether_config={},aether_api={},aether_auth={},aether_mcp={},aether_bin={}", 
+                            log_level, log_level, log_level, log_level, log_level, log_level))
+                    })
+            )
+            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .init();
+    }
+    
+    info!("Starting Aether v{}", env!("CARGO_PKG_VERSION"));
+    
+    // Load configuration
+    let config_path = PathBuf::from(matches.get_one::<String>("config").unwrap());
+    let config = match AetherConfig::load_from_file(&config_path).await {
+        Ok(config) => config,
+        Err(e) => {
+            error!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
+    
+    info!("Configuration loaded from: {:?}", config_path);
+    
+    if use_stdio {
+        info!("Starting MCP server with stdio transport");
+        
+        // Start the MCP stdio server
+        if let Err(e) = server::start_stdio_server(config).await {
+            error!("Server error: {}", e);
+            std::process::exit(1);
+        }
+    } else {
+        // Parse host and port for HTTP mode
+        let host = matches.get_one::<String>("host").unwrap();
+        let port = matches.get_one::<String>("port").unwrap()
+            .parse::<u16>()
+            .unwrap_or_else(|_| {
+                error!("Invalid port number");
+                std::process::exit(1);
+            });
+        
+        let bind_addr: SocketAddr = format!("{}:{}", host, port)
+            .parse()
+            .unwrap_or_else(|_| {
+                error!("Invalid host:port combination");
+                std::process::exit(1);
+            });
+        
+        info!("Starting MCP server with HTTP transport on {}", bind_addr);
+        
+        // Start the MCP SSE server
+        if let Err(e) = server::start_sse_server(config, bind_addr).await {
+            error!("Server error: {}", e);
+            std::process::exit(1);
+        }
+    }
+    
+    info!("Aether stopped");
+    Ok(())
+}
