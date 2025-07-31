@@ -3,6 +3,7 @@
 //! Supports both stdio and HTTP SSE (Server-Sent Events) transports
 
 use crate::{McpServer, protocol::McpRequest};
+use aether_config::generator;
 use axum::{
     extract::{Query, State},
     http::StatusCode,
@@ -10,6 +11,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use serde::{Deserialize};
 use serde_json::Value;
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::{mpsc, RwLock};
@@ -18,6 +20,14 @@ use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, error, info, warn};
 use anyhow;
+
+/// Request payload for config generation API
+#[derive(Debug, Deserialize)]
+struct GenerateConfigRequest {
+    openapi_content: String,
+    api_name: String,
+    base_url: String,
+}
 
 /// Global state for managing SSE connections
 pub struct SseState {
@@ -63,6 +73,7 @@ impl HttpSseTransport {
             .route("/sse", get(handle_sse))
             .route("/sse", post(handle_sse_message))  // Handle MCP messages over SSE
             .route("/health", get(health_check))
+            .route("/api/generate-config", post(handle_generate_config))  // New config generation API
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -249,6 +260,42 @@ async fn handle_sse(
     ];
     
     (headers, Sse::new(stream))
+}
+
+/// Handle config generation API
+async fn handle_generate_config(
+    Json(request): Json<GenerateConfigRequest>,
+) -> Result<String, StatusCode> {
+    info!("🔧 Received config generation request for API: {}", request.api_name);
+    debug!("OpenAPI content length: {} bytes", request.openapi_content.len());
+    debug!("Base URL: {}", request.base_url);
+
+    // Generate the config using the generator module
+    match generator::generate_config_from_openapi(
+        &request.openapi_content,
+        &request.api_name,
+        &request.base_url,
+    ).await {
+        Ok(config) => {
+            info!("✅ Successfully generated config for API: {}", request.api_name);
+            
+            // Serialize config to YAML
+            match serde_yaml::to_string(&config) {
+                Ok(yaml_config) => {
+                    info!("✅ Config serialized to YAML ({} bytes)", yaml_config.len());
+                    Ok(yaml_config)
+                }
+                Err(e) => {
+                    error!("❌ Failed to serialize config to YAML: {}", e);
+                    Err(StatusCode::INTERNAL_SERVER_ERROR)
+                }
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to generate config: {}", e);
+            Err(StatusCode::BAD_REQUEST)
+        }
+    }
 }
 
 /// Health check endpoint

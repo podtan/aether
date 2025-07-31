@@ -1,12 +1,13 @@
 //! Configuration management for Aether
 
-use aether_core::{types::{ToolConfig, AuthSpec, AuthType}, AetherError, Result};
+use aether_core::{types::{ToolConfig, AuthSpec, AuthType, EnhancedToolConfig}, AetherError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
 pub mod openapi;
+pub mod generator;
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,8 @@ pub struct AetherConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
+    #[serde(default)]
+    pub enhanced_tools: HashMap<String, EnhancedToolConfig>,
     pub apis: HashMap<String, ApiConfig>,
 }
 
@@ -141,6 +144,7 @@ impl AetherConfig {
         Self {
             server: ServerConfig::default(),
             tools: HashMap::new(),
+            enhanced_tools: HashMap::new(),
             apis: HashMap::new(),
         }
     }

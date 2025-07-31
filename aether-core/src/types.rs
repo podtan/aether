@@ -60,3 +60,38 @@ pub struct Authorization {
     pub auth_type: String,
     pub credentials: HashMap<String, String>,
 }
+
+/// Source of parameter value (user-provided or server-provided)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ParameterSource {
+    /// Parameter should be provided by the user when calling the tool
+    User,
+    /// Parameter should be provided by the server (from environment variables)
+    Server,
+}
+
+/// Enhanced parameter definition with source metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParameterInfo {
+    pub name: String,
+    pub param_type: String,
+    pub required: bool,
+    pub schema: serde_json::Value,
+    pub source: ParameterSource,
+    pub env_var: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Enhanced tool configuration with parameter source information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedToolConfig {
+    pub name: String,
+    pub description: String,
+    pub api_name: String,
+    pub operation_id: String,
+    pub path: String,
+    pub method: String,
+    pub parameters: Vec<ParameterInfo>,
+    pub auth_spec: Option<AuthSpec>,
+}
