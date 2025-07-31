@@ -1,12 +1,13 @@
 //! Configuration management for Aether
 
-use aether_core::{types::{ToolConfig, AuthSpec, AuthType}, AetherError, Result};
+use aether_core::{types::{ToolConfig, AuthSpec, AuthType, EnhancedToolConfig}, AetherError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
 pub mod openapi;
+pub mod generator;
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,8 @@ pub struct AetherConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
+    #[serde(default)]
+    pub enhanced_tools: HashMap<String, EnhancedToolConfig>,
     pub apis: HashMap<String, ApiConfig>,
 }
 
@@ -128,8 +131,14 @@ impl AetherConfig {
                 return Err(AetherError::Configuration(format!("API '{}' base_url cannot be empty", name)));
             }
             
-            if api_config.openapi_spec.is_empty() {
-                return Err(AetherError::Configuration(format!("API '{}' openapi_spec cannot be empty", name)));
+            // Only require openapi_spec if there are no enhanced tools for this API
+            let has_enhanced_tools_for_api = self.enhanced_tools.values()
+                .any(|tool| tool.api_name == *name);
+            
+            if api_config.openapi_spec.is_empty() && !has_enhanced_tools_for_api {
+                return Err(AetherError::Configuration(format!(
+                    "API '{}' openapi_spec cannot be empty unless enhanced tools are provided", name
+                )));
             }
         }
         
@@ -141,6 +150,7 @@ impl AetherConfig {
         Self {
             server: ServerConfig::default(),
             tools: HashMap::new(),
+            enhanced_tools: HashMap::new(),
             apis: HashMap::new(),
         }
     }

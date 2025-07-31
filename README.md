@@ -172,6 +172,79 @@ The `examples/` directory contains sample configurations and OpenAPI specificati
 - `jsonplaceholder-openapi.yaml`: Example API specification
 - `config.yaml`: Sample configuration file
 
+## Automated Config Generation
+
+Aether supports automated configuration generation from OpenAPI specifications using a two-phase approach that eliminates the need for runtime OpenAPI parsing.
+
+### CLI Tool (aether-cli)
+
+Generate optimized configurations from OpenAPI specs:
+
+```bash
+# Build the CLI tool
+cargo build --release --bin aether-cli
+
+# Generate config from OpenAPI spec
+./target/release/aether-cli generate-config \
+  --input examples/openapi/example-openapi.yaml \
+  --output generated-config.yaml \
+  --api-name example \
+  --base-url "https://api.example.com/api/serviceCall"
+```
+
+### Two-Phase Architecture
+
+#### Phase 1: Configuration Generation
+- CLI parses OpenAPI specification
+- Analyzes parameter schemas to detect environment variables (`${VAR_NAME}`)
+- Classifies parameters as server-managed vs user-provided
+- Generates `enhanced_tools` with complete metadata
+- Produces runtime-ready configuration
+
+#### Phase 2: Runtime Execution
+- Server loads configuration with pre-processed `enhanced_tools`
+- No OpenAPI parsing required at runtime
+- Auto-fills server parameters from environment variables
+- Exposes only user parameters in tool schemas
+
+### Why This Design?
+
+**Base URL Flexibility**: The `--base-url` parameter allows environment-specific overrides (dev/staging/prod) even when OpenAPI spec contains servers section.
+
+**Runtime Performance**: Pre-processing OpenAPI into `enhanced_tools` eliminates runtime parsing overhead and enables sophisticated parameter source detection.
+
+**Empty openapi_spec**: When `enhanced_tools` are present, `openapi_spec` can be empty because all metadata is pre-processed:
+
+```yaml
+apis:
+  example:
+    base_url: "https://api.example.com/api/serviceCall"
+    openapi_spec: ""  # Not needed - data is in enhanced_tools
+    timeout: 30
+
+enhanced_tools:
+  example_toolBalance:
+    parameters:
+    - name: api_key
+      source: server      # Auto-filled from environment
+      env_var: EXAMPLE_VAR
+```
+
+**Parameter Source Intelligence**: Automatically detects which parameters should be server-managed:
+- Environment variable patterns: `${VAR_NAME}`
+- Common auth parameter names: `api_key`, `token`, `api_key`
+- Parameter descriptions and schemas
+
+### Generated vs Manual Configs
+
+| Aspect | Manual Config | Generated Config |
+|--------|---------------|------------------|
+| OpenAPI parsing | Runtime | Build-time |
+| Parameter classification | Manual | Automatic |
+| Environment integration | Manual | Automatic |
+| Tool schema optimization | No | Yes (user params only) |
+| Maintenance | High | Low |
+
 ## Development
 
 ### Running Tests

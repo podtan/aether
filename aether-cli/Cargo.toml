@@ -1,0 +1,26 @@
+[package]
+name = "aether-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI tool for Aether configuration generation"
+
+[[bin]]
+name = "aether-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+aether-core = { path = "../aether-core" }
+aether-config = { path = "../aether-config" }
+anyhow.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

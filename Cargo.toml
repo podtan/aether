@@ -5,7 +5,8 @@ members = [
     "aether-api",
     "aether-config",
     "aether-auth",
-    "aether-bin"
+    "aether-bin",
+    "aether-cli"
 ]
 resolver = "2"
 

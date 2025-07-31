@@ -59,27 +59,45 @@ impl McpServer {
         let mut tools = HashMap::new();
         let mut api_clients = HashMap::new();
         
-        // Process each API configuration
+        // Create API clients first
         for (api_name, api_config) in &config.apis {
-            info!("Processing API: {}", api_name);
+            info!("Creating API client for: {}", api_name);
             
             // Create API client
             let timeout = api_config.timeout.map(Duration::from_secs);
             let client = ApiClient::new(api_config.base_url.clone(), timeout)?;
             api_clients.insert(api_name.clone(), client);
+        }
+        
+        // Check if we have enhanced tools (from generated configs)
+        if !config.enhanced_tools.is_empty() {
+            info!("Using enhanced tools from generated configuration ({} tools)", config.enhanced_tools.len());
+            // Enhanced tools don't need dynamic generation - they're already defined
+        } else {
+            info!("Generating tools dynamically from OpenAPI specs");
             
-            // Load and process OpenAPI specification
-            let processor = OpenApiProcessor::load_from_file(&api_config.openapi_spec).await?;
-            let operations = processor.extract_operations()?;
-            
-            // Convert operations to tools
-            for operation in operations {
-                let tool_name = format!("{}_{}", api_name, operation.operation_id);
+            // Process each API configuration for dynamic tool generation
+            for (api_name, api_config) in &config.apis {
+                if api_config.openapi_spec.is_empty() {
+                    warn!("Skipping API '{}' - no OpenAPI spec file configured", api_name);
+                    continue;
+                }
                 
-                tools.insert(tool_name.clone(), ToolDefinition {
-                    operation: operation.clone(),
-                    api_name: api_name.clone(),
-                });
+                info!("Processing API: {}", api_name);
+                
+                // Load and process OpenAPI specification
+                let processor = OpenApiProcessor::load_from_file(&api_config.openapi_spec).await?;
+                let operations = processor.extract_operations()?;
+                
+                // Convert operations to tools
+                for operation in operations {
+                    let tool_name = format!("{}_{}", api_name, operation.operation_id);
+                    
+                    tools.insert(tool_name.clone(), ToolDefinition {
+                        operation: operation.clone(),
+                        api_name: api_name.clone(),
+                    });
+                }
             }
         }
         
@@ -87,7 +105,7 @@ impl McpServer {
         *self.tools.write().await = tools.clone();
         *self.api_clients.write().await = api_clients;
         
-        let tool_count = tools.len();
+        let tool_count = tools.len() + config.enhanced_tools.len();
         info!("Loaded {} tools from {} APIs", tool_count, config.apis.len());
         
         Ok(())
@@ -156,34 +174,64 @@ impl McpServer {
 
     /// List all available tools
     pub async fn list_tools(&self) -> Result<Vec<Tool>, AetherError> {
-        let tools = self.tools.read().await;
+        let config = self.config.read().await;
         let mut tool_list = Vec::new();
 
-        for (tool_name, tool_def) in tools.iter() {
-            let input_schema = self.create_tool_schema(&tool_def.operation).await;
+        // First, check if we have enhanced tools (from generated configs)
+        if !config.enhanced_tools.is_empty() {
+            info!("Using enhanced tools from generated config");
             
-            // Determine if tool requires authentication
-            let config = self.config.read().await;
-            let auth_spec = if let Some(api_config) = config.apis.get(&tool_def.api_name) {
-                if let Some(api_auth) = &api_config.authentication {
-                    Some(api_auth.to_auth_spec()?)
+            for (tool_name, enhanced_tool) in &config.enhanced_tools {
+                let input_schema = self.create_enhanced_tool_schema(enhanced_tool).await;
+                
+                // Determine if tool requires authentication
+                let auth_spec = if let Some(api_config) = config.apis.get(&enhanced_tool.api_name) {
+                    if let Some(api_auth) = &api_config.authentication {
+                        Some(api_auth.to_auth_spec()?)
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
+                
+                tool_list.push(Tool {
+                    name: tool_name.clone(),
+                    description: enhanced_tool.description.clone(),
+                    parameters: input_schema,
+                    auth_spec,
+                });
+            }
+        } else {
+            // Fall back to dynamically generated tools
+            info!("Using dynamically generated tools");
+            let tools = self.tools.read().await;
             
-            tool_list.push(Tool {
-                name: tool_name.clone(),
-                description: if tool_def.operation.description.is_empty() {
-                    format!("{} operation from {} API", tool_def.operation.operation_id, tool_def.api_name)
+            for (tool_name, tool_def) in tools.iter() {
+                let input_schema = self.create_tool_schema(&tool_def.operation).await;
+                
+                // Determine if tool requires authentication
+                let auth_spec = if let Some(api_config) = config.apis.get(&tool_def.api_name) {
+                    if let Some(api_auth) = &api_config.authentication {
+                        Some(api_auth.to_auth_spec()?)
+                    } else {
+                        None
+                    }
                 } else {
-                    tool_def.operation.description.clone()
-                },
-                parameters: input_schema,
-                auth_spec,
-            });
+                    None
+                };
+                
+                tool_list.push(Tool {
+                    name: tool_name.clone(),
+                    description: if tool_def.operation.description.is_empty() {
+                        format!("{} operation from {} API", tool_def.operation.operation_id, tool_def.api_name)
+                    } else {
+                        tool_def.operation.description.clone()
+                    },
+                    parameters: input_schema,
+                    auth_spec,
+                });
+            }
         }
 
         debug!("Listed {} tools", tool_list.len());
@@ -199,18 +247,133 @@ impl McpServer {
     ) -> Result<ToolResponse, AetherError> {
         info!("🔧 Calling tool: {}", tool_name);
         
-        // Find the tool definition
+        let config = self.config.read().await;
+        
+        // First check if we have an enhanced tool (from generated config)
+        if let Some(enhanced_tool) = config.enhanced_tools.get(tool_name) {
+            info!("📋 Found enhanced tool definition for: {}", tool_name);
+            return self.call_enhanced_tool(enhanced_tool, arguments, authorization).await;
+        }
+        
+        // Fall back to regular dynamically generated tools
         let tools = self.tools.read().await;
-        let tool_def = tools.get(tool_name)
+        if let Some(tool_def) = tools.get(tool_name) {
+            let tool_def = tool_def.clone();
+            drop(tools);
+            debug!("📋 Found regular tool definition for: {} (api: {})", tool_name, tool_def.api_name);
+            return self.call_regular_tool(&tool_def, arguments, authorization).await;
+        }
+        
+        error!("❌ Tool not found: {}", tool_name);
+        Err(AetherError::Mcp(format!("Tool not found: {}", tool_name)))
+    }
+
+    /// Call an enhanced tool (with parameter source metadata)
+    async fn call_enhanced_tool(
+        &self,
+        enhanced_tool: &aether_core::types::EnhancedToolConfig,
+        mut arguments: HashMap<String, Value>,
+        authorization: Option<Authorization>,
+    ) -> Result<ToolResponse, AetherError> {
+        info!("🚀 Executing enhanced tool: {}", enhanced_tool.name);
+        
+        // Augment arguments with server-provided parameters
+        for param in &enhanced_tool.parameters {
+            if param.source == aether_core::types::ParameterSource::Server {
+                if let Some(env_var) = &param.env_var {
+                    match std::env::var(env_var) {
+                        Ok(value) => {
+                            info!("🔧 Auto-filling parameter '{}' from env var '{}' = '{}'", param.name, env_var, value);
+                            arguments.insert(param.name.clone(), Value::String(value));
+                        }
+                        Err(_) => {
+                            if param.required {
+                                error!("❌ Required environment variable '{}' not set for parameter '{}'", env_var, param.name);
+                                return Err(AetherError::Api(format!(
+                                    "Environment variable '{}' is not set for parameter '{}'", 
+                                    env_var, param.name
+                                )));
+                            } else {
+                                warn!("⚠️  Optional environment variable '{}' not set for parameter '{}'", env_var, param.name);
+                            }
+                        }
+                    }
+                } else {
+                    warn!("⚠️  Server parameter '{}' has no env_var configured", param.name);
+                }
+            }
+        }
+        
+        // Create an Operation from the enhanced tool config to execute with existing client
+        let operation = aether_config::openapi::Operation {
+            operation_id: enhanced_tool.operation_id.clone(),
+            path: enhanced_tool.path.clone(),
+            method: enhanced_tool.method.clone(),
+            summary: enhanced_tool.name.clone(),
+            description: enhanced_tool.description.clone(),
+            parameters: enhanced_tool.parameters.iter().map(|p| {
+                aether_config::openapi::Parameter {
+                    name: p.name.clone(),
+                    param_type: p.param_type.clone(),
+                    required: p.required,
+                    schema: p.schema.clone(),
+                }
+            }).collect(),
+        };
+        
+        // Get the API client and configuration
+        let api_clients = self.api_clients.read().await;
+        let api_client = api_clients.get(&enhanced_tool.api_name)
             .ok_or_else(|| {
-                error!("❌ Tool not found: {}", tool_name);
-                AetherError::Mcp(format!("Tool not found: {}", tool_name))
-            })?
-            .clone();
-        drop(tools);
+                error!("❌ API client not found: {}", enhanced_tool.api_name);
+                AetherError::Mcp(format!("API client not found: {}", enhanced_tool.api_name))
+            })?;
         
-        debug!("📋 Found tool definition for: {} (api: {})", tool_name, tool_def.api_name);
+        // Determine authorization and auth_spec to use
+        let config = self.config.read().await;
+        let (effective_auth_spec, effective_authorization) = if let Some(api_config) = config.apis.get(&enhanced_tool.api_name) {
+            if let Some(api_auth) = &api_config.authentication {
+                info!("🔐 Creating authentication for API: {}", enhanced_tool.api_name);
+                let auth_spec = api_auth.to_auth_spec()?;
+                let authorization = self.create_authorization_from_api_auth(api_auth)?;
+                debug!("✅ Auth spec created: {:?}", auth_spec);
+                (Some(auth_spec), Some(authorization))
+            } else {
+                if let Some(auth) = authorization {
+                    info!("🔐 Using provided authorization for API: {}", enhanced_tool.api_name);
+                    (None, Some(auth))
+                } else {
+                    info!("ℹ️  No authentication configured for API: {}", enhanced_tool.api_name);
+                    (None, None)
+                }
+            }
+        } else {
+            error!("❌ API configuration not found: {}", enhanced_tool.api_name);
+            (None, None)
+        };
         
+        info!("🚀 Executing enhanced operation: {} with params: {:?}", enhanced_tool.operation_id, arguments);
+        
+        // Execute the operation
+        let response = api_client.execute_operation(
+            &operation,
+            &arguments,
+            effective_auth_spec.as_ref(),
+            effective_authorization.as_ref(),
+        ).await?;
+        
+        info!("✅ Enhanced tool execution completed for: {}", enhanced_tool.name);
+        
+        Ok(response)
+    }
+
+    /// Call a regular tool (dynamically generated from OpenAPI)
+    async fn call_regular_tool(
+        &self,
+        tool_def: &ToolDefinition,
+        arguments: HashMap<String, Value>,
+        authorization: Option<Authorization>,
+    ) -> Result<ToolResponse, AetherError> {
         // Get the API client and configuration
         let api_clients = self.api_clients.read().await;
         let api_client = api_clients.get(&tool_def.api_name)
@@ -224,14 +387,12 @@ impl McpServer {
         let (effective_auth_spec, effective_authorization) = if let Some(api_config) = config.apis.get(&tool_def.api_name) {
             if let Some(api_auth) = &api_config.authentication {
                 info!("🔐 Creating authentication for API: {}", tool_def.api_name);
-                // Create AuthSpec and Authorization from API authentication config
                 let auth_spec = api_auth.to_auth_spec()?;
                 let authorization = self.create_authorization_from_api_auth(api_auth)?;
                 debug!("✅ Auth spec created: {:?}", auth_spec);
                 debug!("✅ Authorization created with credentials: {:?}", authorization.credentials.keys().collect::<Vec<_>>());
                 (Some(auth_spec), Some(authorization))
             } else {
-                // Use provided authorization if available
                 if let Some(auth) = authorization {
                     info!("🔐 Using provided authorization for API: {}", tool_def.api_name);
                     (None, Some(auth))
@@ -255,21 +416,21 @@ impl McpServer {
             effective_authorization.as_ref(),
         ).await?;
         
-        info!("✅ Tool execution completed for: {}", tool_name);
+        info!("✅ Tool execution completed for: {}", tool_def.operation.operation_id);
         
-        Ok(ToolResponse {
-            content: response.content,
-            is_error: false,
-        })
+        Ok(response)
     }
 
     /// Get server statistics
     pub async fn get_stats(&self) -> HashMap<String, Value> {
         let mut stats = HashMap::new();
         let tools = self.tools.read().await;
-        stats.insert("tools_count".to_string(), Value::Number(tools.len().into()));
-        
         let config = self.config.read().await;
+        
+        let total_tools = tools.len() + config.enhanced_tools.len();
+        stats.insert("tools_count".to_string(), Value::Number(total_tools.into()));
+        stats.insert("regular_tools_count".to_string(), Value::Number(tools.len().into()));
+        stats.insert("enhanced_tools_count".to_string(), Value::Number(config.enhanced_tools.len().into()));
         stats.insert("apis_count".to_string(), Value::Number(config.apis.len().into()));
         
         stats
@@ -339,6 +500,62 @@ impl McpServer {
             "type": "object",
             "properties": properties
         })
+    }
+
+    /// Create tool input schema from enhanced tool configuration (only user parameters)
+    async fn create_enhanced_tool_schema(&self, enhanced_tool: &aether_core::types::EnhancedToolConfig) -> serde_json::Value {
+        let mut properties = std::collections::HashMap::new();
+        let mut required = Vec::new();
+        
+        // Only include user-provided parameters in the schema
+        for param in &enhanced_tool.parameters {
+            if param.source == aether_core::types::ParameterSource::User {
+                let param_name = param.name.clone();
+                
+                // Extract type from schema
+                let param_type = if let Some(schema_type) = param.schema.get("type").and_then(|t| t.as_str()) {
+                    schema_type
+                } else {
+                    "string" // default to string
+                };
+                
+                let param_schema = match param_type {
+                    "string" => serde_json::json!({"type": "string"}),
+                    "integer" => serde_json::json!({"type": "integer"}),
+                    "number" => serde_json::json!({"type": "number"}),
+                    "boolean" => serde_json::json!({"type": "boolean"}),
+                    _ => serde_json::json!({"type": "string"}), // default to string
+                };
+                
+                let mut property = serde_json::Map::new();
+                property.insert("type".to_string(), param_schema["type"].clone());
+                
+                // Add description
+                if let Some(desc) = &param.description {
+                    property.insert("description".to_string(), serde_json::Value::String(desc.clone()));
+                } else if let Some(desc) = param.schema.get("description").and_then(|d| d.as_str()) {
+                    property.insert("description".to_string(), serde_json::Value::String(desc.to_string()));
+                }
+                
+                properties.insert(param_name.clone(), serde_json::Value::Object(property));
+                
+                // Add to required if this parameter is required
+                if param.required {
+                    required.push(param_name);
+                }
+            }
+        }
+        
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": properties
+        });
+        
+        if !required.is_empty() {
+            schema["required"] = serde_json::json!(required);
+        }
+        
+        schema
     }
 
     /// Handle tools/list request

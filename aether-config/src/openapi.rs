@@ -35,6 +35,11 @@ impl OpenApiProcessor {
         Ok(processor)
     }
     
+    /// Create OpenAPI processor from parsed specification
+    pub fn from_spec(spec: Value) -> Self {
+        Self { spec }
+    }
+    
     /// Validate the OpenAPI specification
     pub fn validate(&self) -> Result<()> {
         if !self.spec.is_object() {
