@@ -32,9 +32,9 @@ enum Commands {
         #[arg(short, long)]
         api_name: String,
         
-        /// Base URL for the API being configured
+        /// Base URL for the API being configured (optional - will use OpenAPI servers if not provided)
         #[arg(short, long)]
-        base_url: String,
+        base_url: Option<String>,
     },
 }
 
@@ -61,18 +61,30 @@ async fn generate_config(
     output_path: &PathBuf,
     server_url: &str,
     api_name: &str,
-    base_url: &str,
+    base_url: &Option<String>,
 ) -> Result<()> {
     info!("🔧 Generating Aether config from OpenAPI spec");
     info!("   Input: {:?}", input_path);
     info!("   Output: {:?}", output_path);
     info!("   Server: {}", server_url);
     info!("   API Name: {}", api_name);
-    info!("   Base URL: {}", base_url);
+    if let Some(url) = base_url {
+        info!("   Base URL: {}", url);
+    } else {
+        info!("   Base URL: <will extract from OpenAPI spec>");
+    }
 
     // Read the OpenAPI file
     let openapi_content = tokio::fs::read_to_string(input_path).await?;
     info!("✅ Read OpenAPI file ({} bytes)", openapi_content.len());
+
+    // Extract base URL from OpenAPI spec if not provided
+    let final_base_url = if let Some(url) = base_url {
+        url.clone()
+    } else {
+        info!("🔍 Extracting base URL from OpenAPI specification...");
+        extract_base_url_from_openapi(&openapi_content)?
+    };
 
     // Create HTTP client
     let client = reqwest::Client::new();
@@ -81,7 +93,7 @@ async fn generate_config(
     let payload = serde_json::json!({
         "openapi_content": openapi_content,
         "api_name": api_name,
-        "base_url": base_url
+        "base_url": final_base_url
     });
 
     // Send request to the config generation API
@@ -109,4 +121,28 @@ async fn generate_config(
     println!("   Output: {:?}", output_path);
 
     Ok(())
+}
+
+/// Extract base URL from OpenAPI specification
+fn extract_base_url_from_openapi(openapi_content: &str) -> Result<String> {
+    // Parse OpenAPI specification
+    let spec: serde_json::Value = if openapi_content.trim_start().starts_with('{') {
+        serde_json::from_str(openapi_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse OpenAPI JSON: {}", e))?
+    } else {
+        serde_yaml::from_str(openapi_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse OpenAPI YAML: {}", e))?
+    };
+
+    // Extract servers section
+    if let Some(servers) = spec.get("servers").and_then(|s| s.as_array()) {
+        if let Some(first_server) = servers.first() {
+            if let Some(url) = first_server.get("url").and_then(|u| u.as_str()) {
+                info!("✅ Extracted base URL from OpenAPI spec: {}", url);
+                return Ok(url.to_string());
+            }
+        }
+    }
+
+    anyhow::bail!("No base URL found in OpenAPI specification servers section")
 }
