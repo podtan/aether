@@ -131,8 +131,14 @@ impl AetherConfig {
                 return Err(AetherError::Configuration(format!("API '{}' base_url cannot be empty", name)));
             }
             
-            if api_config.openapi_spec.is_empty() {
-                return Err(AetherError::Configuration(format!("API '{}' openapi_spec cannot be empty", name)));
+            // Only require openapi_spec if there are no enhanced tools for this API
+            let has_enhanced_tools_for_api = self.enhanced_tools.values()
+                .any(|tool| tool.api_name == *name);
+            
+            if api_config.openapi_spec.is_empty() && !has_enhanced_tools_for_api {
+                return Err(AetherError::Configuration(format!(
+                    "API '{}' openapi_spec cannot be empty unless enhanced tools are provided", name
+                )));
             }
         }
         

@@ -59,27 +59,45 @@ impl McpServer {
         let mut tools = HashMap::new();
         let mut api_clients = HashMap::new();
         
-        // Process each API configuration
+        // Create API clients first
         for (api_name, api_config) in &config.apis {
-            info!("Processing API: {}", api_name);
+            info!("Creating API client for: {}", api_name);
             
             // Create API client
             let timeout = api_config.timeout.map(Duration::from_secs);
             let client = ApiClient::new(api_config.base_url.clone(), timeout)?;
             api_clients.insert(api_name.clone(), client);
+        }
+        
+        // Check if we have enhanced tools (from generated configs)
+        if !config.enhanced_tools.is_empty() {
+            info!("Using enhanced tools from generated configuration ({} tools)", config.enhanced_tools.len());
+            // Enhanced tools don't need dynamic generation - they're already defined
+        } else {
+            info!("Generating tools dynamically from OpenAPI specs");
             
-            // Load and process OpenAPI specification
-            let processor = OpenApiProcessor::load_from_file(&api_config.openapi_spec).await?;
-            let operations = processor.extract_operations()?;
-            
-            // Convert operations to tools
-            for operation in operations {
-                let tool_name = format!("{}_{}", api_name, operation.operation_id);
+            // Process each API configuration for dynamic tool generation
+            for (api_name, api_config) in &config.apis {
+                if api_config.openapi_spec.is_empty() {
+                    warn!("Skipping API '{}' - no OpenAPI spec file configured", api_name);
+                    continue;
+                }
                 
-                tools.insert(tool_name.clone(), ToolDefinition {
-                    operation: operation.clone(),
-                    api_name: api_name.clone(),
-                });
+                info!("Processing API: {}", api_name);
+                
+                // Load and process OpenAPI specification
+                let processor = OpenApiProcessor::load_from_file(&api_config.openapi_spec).await?;
+                let operations = processor.extract_operations()?;
+                
+                // Convert operations to tools
+                for operation in operations {
+                    let tool_name = format!("{}_{}", api_name, operation.operation_id);
+                    
+                    tools.insert(tool_name.clone(), ToolDefinition {
+                        operation: operation.clone(),
+                        api_name: api_name.clone(),
+                    });
+                }
             }
         }
         
@@ -87,7 +105,7 @@ impl McpServer {
         *self.tools.write().await = tools.clone();
         *self.api_clients.write().await = api_clients;
         
-        let tool_count = tools.len();
+        let tool_count = tools.len() + config.enhanced_tools.len();
         info!("Loaded {} tools from {} APIs", tool_count, config.apis.len());
         
         Ok(())
@@ -407,9 +425,12 @@ impl McpServer {
     pub async fn get_stats(&self) -> HashMap<String, Value> {
         let mut stats = HashMap::new();
         let tools = self.tools.read().await;
-        stats.insert("tools_count".to_string(), Value::Number(tools.len().into()));
-        
         let config = self.config.read().await;
+        
+        let total_tools = tools.len() + config.enhanced_tools.len();
+        stats.insert("tools_count".to_string(), Value::Number(total_tools.into()));
+        stats.insert("regular_tools_count".to_string(), Value::Number(tools.len().into()));
+        stats.insert("enhanced_tools_count".to_string(), Value::Number(config.enhanced_tools.len().into()));
         stats.insert("apis_count".to_string(), Value::Number(config.apis.len().into()));
         
         stats
