@@ -1,0 +1,64 @@
+server:
+  host: 127.0.0.1
+  port: 8080
+  log_level: info
+tools: {}
+enhanced_tools:
+  jsonplaceholder_getPost:
+    name: jsonplaceholder_getPost
+    description: Retrieve a specific post by ID
+    api_name: jsonplaceholder
+    operation_id: getPost
+    path: /posts/{id}
+    method: GET
+    parameters:
+    - name: id
+      param_type: path
+      required: true
+      schema:
+        type: integer
+      source: user
+      env_var: null
+      description: null
+    auth_spec: null
+  jsonplaceholder_createPost:
+    name: jsonplaceholder_createPost
+    description: Create a new post
+    api_name: jsonplaceholder
+    operation_id: createPost
+    path: /posts
+    method: POST
+    parameters: []
+    auth_spec: null
+  jsonplaceholder_getPosts:
+    name: jsonplaceholder_getPosts
+    description: Retrieve a list of all posts
+    api_name: jsonplaceholder
+    operation_id: getPosts
+    path: /posts
+    method: GET
+    parameters:
+    - name: userId
+      param_type: query
+      required: false
+      schema:
+        type: integer
+      source: user
+      env_var: null
+      description: null
+    auth_spec: null
+  jsonplaceholder_getUsers:
+    name: jsonplaceholder_getUsers
+    description: Retrieve a list of all users
+    api_name: jsonplaceholder
+    operation_id: getUsers
+    path: /users
+    method: GET
+    parameters: []
+    auth_spec: null
+apis:
+  jsonplaceholder:
+    base_url: https://jsonplaceholder.typicode.com
+    openapi_spec: ''
+    timeout: 30
+    authentication: null

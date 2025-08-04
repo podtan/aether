@@ -1,0 +1,21 @@
+server:
+  host: 127.0.0.1
+  port: 8080
+  log_level: info
+tools: {}
+enhanced_tools:
+  test_getUsers:
+    name: test_getUsers
+    description: Get users
+    api_name: test
+    operation_id: getUsers
+    path: /users
+    method: GET
+    parameters: []
+    auth_spec: null
+apis:
+  test:
+    base_url: https://api.test.com
+    openapi_spec: ''
+    timeout: 30
+    authentication: null
