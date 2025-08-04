@@ -4,7 +4,7 @@
 //! as Model Context Protocol (MCP) endpoints.
 
 use aether_config::AetherConfig;
-use aether_mcp::server;
+use aether_mcp::{server, MultiConfigServer, MultiConfigTransport};
 use clap::{Arg, Command};
 use std::path::PathBuf;
 use tracing::{error, info};
@@ -60,6 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .action(clap::ArgAction::SetTrue)
                 .help("Use stdio transport instead of HTTP")
         )
+        .arg(
+            Arg::new("multi-config")
+                .long("multi-config")
+                .action(clap::ArgAction::SetTrue)
+                .help("Use multi-config mode with directory-based configuration")
+        )
+        .arg(
+            Arg::new("configs-dir")
+                .long("configs-dir")
+                .value_name("DIR")
+                .help("Directory containing API configurations (for multi-config mode)")
+                .default_value("configs")
+        )
         .get_matches();
     
     // Initialize logging
@@ -75,6 +88,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
+    
+    // Check if multi-config mode is requested
+    let use_multi_config = matches.get_flag("multi-config");
     
     // Check if stdio mode is requested (determine early for logging setup)
     let use_stdio = matches.get_flag("stdio");
@@ -111,27 +127,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("Starting Aether v{}", env!("CARGO_PKG_VERSION"));
     
-    // Load configuration
-    let config_path = PathBuf::from(matches.get_one::<String>("config").unwrap());
-    let config = match AetherConfig::load_from_file(&config_path).await {
-        Ok(config) => config,
-        Err(e) => {
-            error!("Failed to load configuration: {}", e);
-            std::process::exit(1);
-        }
-    };
-    
-    info!("Configuration loaded from: {:?}", config_path);
-    
-    if use_stdio {
-        info!("Starting MCP server with stdio transport");
+    if use_multi_config {
+        // Multi-config mode
+        let configs_dir = matches.get_one::<String>("configs-dir").unwrap();
+        info!("Starting in multi-config mode with directory: {}", configs_dir);
         
-        // Start the MCP stdio server
-        if let Err(e) = server::start_stdio_server(config).await {
-            error!("Server error: {}", e);
+        if use_stdio {
+            error!("Multi-config mode is not compatible with stdio transport");
             std::process::exit(1);
         }
-    } else {
+        
         // Parse host and port for HTTP mode
         let host = matches.get_one::<String>("host").unwrap();
         let port = matches.get_one::<String>("port").unwrap()
@@ -141,19 +146,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             });
         
-        let bind_addr: SocketAddr = format!("{}:{}", host, port)
-            .parse()
-            .unwrap_or_else(|_| {
-                error!("Invalid host:port combination");
+        info!("Starting Multi-Config MCP server on {}:{}", host, port);
+        
+        // Create multi-config server
+        let multi_server = match MultiConfigServer::new(configs_dir).await {
+            Ok(server) => server,
+            Err(e) => {
+                error!("Failed to create multi-config server: {}", e);
                 std::process::exit(1);
-            });
+            }
+        };
         
-        info!("Starting MCP server with HTTP transport on {}", bind_addr);
-        
-        // Start the MCP SSE server
-        if let Err(e) = server::start_sse_server(config, bind_addr).await {
-            error!("Server error: {}", e);
+        // Start the multi-config transport
+        let transport = MultiConfigTransport::new(multi_server, port);
+        if let Err(e) = transport.start().await {
+            error!("Multi-config server error: {}", e);
             std::process::exit(1);
+        }
+    } else {
+        // Single-config mode (existing behavior)
+        // Load configuration
+        let config_path = PathBuf::from(matches.get_one::<String>("config").unwrap());
+        let config = match AetherConfig::load_from_file(&config_path).await {
+            Ok(config) => config,
+            Err(e) => {
+                error!("Failed to load configuration: {}", e);
+                std::process::exit(1);
+            }
+        };
+        
+        info!("Configuration loaded from: {:?}", config_path);
+        
+        if use_stdio {
+            info!("Starting MCP server with stdio transport");
+            
+            // Start the MCP stdio server
+            if let Err(e) = server::start_stdio_server(config).await {
+                error!("Server error: {}", e);
+                std::process::exit(1);
+            }
+        } else {
+            // Parse host and port for HTTP mode
+            let host = matches.get_one::<String>("host").unwrap();
+            let port = matches.get_one::<String>("port").unwrap()
+                .parse::<u16>()
+                .unwrap_or_else(|_| {
+                    error!("Invalid port number");
+                    std::process::exit(1);
+                });
+            
+            let bind_addr: SocketAddr = format!("{}:{}", host, port)
+                .parse()
+                .unwrap_or_else(|_| {
+                    error!("Invalid host:port combination");
+                    std::process::exit(1);
+                });
+            
+            info!("Starting MCP server with HTTP transport on {}", bind_addr);
+            
+            // Start the MCP SSE server
+            if let Err(e) = server::start_sse_server(config, bind_addr).await {
+                error!("Server error: {}", e);
+                std::process::exit(1);
+            }
         }
     }
     

@@ -446,17 +446,17 @@ impl MultiConfigTransport {
             .route("/sse", get(handle_single_sse))
 
             // Multi-API endpoints  
-            .route("/:api_name/message", post(handle_multi_message))
-            .route("/:api_name/messages", post(handle_multi_message))
-            .route("/:api_name/sse", get(handle_multi_sse))
+            .route("/{api_name}/message", post(handle_multi_message))
+            .route("/{api_name}/messages", post(handle_multi_message))
+            .route("/{api_name}/sse", get(handle_multi_sse))
 
             // API management endpoints
             .route("/api/generate-config", post(handle_generate_config))
             .route("/api/upload-openapi", post(handle_upload_openapi))
             .route("/api/list", get(handle_list_apis))
-            .route("/api/:api_name/config", get(handle_get_config))
-            .route("/api/:api_name/config", post(handle_update_config))
-            .route("/api/:api_name/delete", post(handle_delete_api))
+            .route("/api/{api_name}/config", get(handle_get_config))
+            .route("/api/{api_name}/config", post(handle_update_config))
+            .route("/api/{api_name}/delete", post(handle_delete_api))
 
             // Health and stats
             .route("/health", get(handle_multi_health))
