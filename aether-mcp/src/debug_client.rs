@@ -12,8 +12,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     
     let server = McpServerConfig {
-        name: "test".to_string(),
-        url: "http://127.0.0.1:8000/sse".to_string(),
+        name: "backwards-compat".to_string(),
+        url: "http://localhost:8000/sse".to_string(),
     };
 
     println!("🔍 Debug: Starting connection to MCP server: {} at {}", server.name, server.url);

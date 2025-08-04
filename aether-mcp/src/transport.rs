@@ -615,29 +615,47 @@ async fn handle_multi_sse(
     // Store the sender for this session
     app_state.sse_state.connections.write().await.insert(session_key.clone(), tx.clone());
     
-    // Send initial connection confirmation
-    let welcome_event = Event::default()
-        .event("connected")  
-        .data(serde_json::json!({
-            "api_name": api_name,
-            "session_id": session_id,
-            "message": format!("Connected to {} API", api_name)
-        }).to_string());
+    // CRITICAL: Send the endpoint event that rmcp client is waiting for
+    let endpoint_url = format!("/{}/messages?session_id={}", api_name, session_id);
+    let endpoint_event = Event::default()
+        .event("endpoint")
+        .data(endpoint_url);
     
-    let _ = tx.send(welcome_event);
+    debug!("Sending endpoint event with URL: /{}/messages?session_id={}", api_name, session_id);
+    if let Err(e) = tx.send(endpoint_event) {
+        error!("Failed to send endpoint event: {}", e);
+    }
+
+    // Start a keep-alive ping task for this connection (like single-config version)
+    let ping_tx = tx.clone();
+    let ping_session_key = session_key.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let ping_event = Event::default()
+                .event("ping")
+                .data("keep-alive");
+            
+            if ping_tx.send(ping_event).is_err() {
+                debug!("SSE connection {} closed, stopping ping task", ping_session_key);
+                break;
+            }
+        }
+    });
     
     // Create the stream
     let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
         .map(|event| Ok(event));
     
-    // Set headers for SSE
+    // Set headers for SSE - match the single-config version format
     let mut headers = axum::http::HeaderMap::new();
-    headers.insert("Cache-Control", "no-cache".parse().unwrap());
-    headers.insert("Connection", "keep-alive".parse().unwrap());
-    headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
-    headers.insert("Access-Control-Allow-Headers", "Cache-Control".parse().unwrap());
-    headers.insert("X-API-Name", api_name.parse().unwrap());
-    headers.insert("X-Session-ID", session_id.parse().unwrap());
+    headers.insert("x-session-id", session_id.parse().unwrap());
+    headers.insert("cache-control", "no-cache".parse().unwrap());
+    headers.insert("connection", "keep-alive".parse().unwrap());
+    headers.insert("content-type", "text/event-stream".parse().unwrap());
+    headers.insert("access-control-allow-origin", "*".parse().unwrap());
+    headers.insert("access-control-allow-headers", "*".parse().unwrap());
     
     Ok((headers, Sse::new(stream)))
 }
