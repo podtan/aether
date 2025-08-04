@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Configured APIs - Aether Config Manager{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900">Configured APIs</h2>
+            <p class="mt-1 text-sm text-gray-600">
+                View and manage your API configurations
+            </p>
+        </div>
+        <a href="/ui/" 
+           class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+            Back to Home
+        </a>
+    </div>
+
+    {% if configs.is_empty() %}
+    <!-- Empty state -->
+    <div class="text-center py-12">
+        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-gray-900">No APIs configured</h3>
+        <p class="mt-1 text-sm text-gray-500">Get started by uploading an OpenAPI specification.</p>
+        <div class="mt-6">
+            <a href="/ui/" 
+               class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+                Upload API Specification
+            </a>
+        </div>
+    </div>
+    {% else %}
+    <!-- API list -->
+    <div class="bg-white shadow overflow-hidden sm:rounded-md">
+        <ul role="list" class="divide-y divide-gray-200">
+            {% for config in configs %}
+            <li>
+                <div class="px-4 py-4 sm:px-6">
+                    <div class="flex items-center justify-between">
+                        <div class="flex-1 min-w-0">
+                            <h3 class="text-lg font-medium text-gray-900 truncate">
+                                {{ config.api_name }}
+                            </h3>
+                            <div class="mt-1 flex flex-col sm:flex-row sm:flex-wrap sm:mt-0 sm:space-x-6">
+                                <div class="mt-2 flex items-center text-sm text-gray-500">
+                                    <svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                                    </svg>
+                                    {{ config.base_url }}
+                                </div>
+                                <div class="mt-2 flex items-center text-sm text-gray-500">
+                                    <svg class="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                    </svg>
+                                    Created {{ config.created_at.format("%Y-%m-%d %H:%M UTC") }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                Active
+                            </span>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <div class="flex space-x-4">
+                            <a href="/{{ config.api_name }}/sse" 
+                               target="_blank"
+                               class="text-sm text-primary hover:text-blue-700 font-medium">
+                                SSE Endpoint
+                            </a>
+                            <a href="/api/{{ config.api_name }}/config" 
+                               target="_blank"
+                               class="text-sm text-primary hover:text-blue-700 font-medium">
+                                View Config
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

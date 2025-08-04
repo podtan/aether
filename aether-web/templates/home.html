@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Aether Config Manager - Home{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page title -->
+    <div>
+        <h2 class="text-2xl font-bold text-gray-900">Multi-Config Manager</h2>
+        <p class="mt-1 text-sm text-gray-600">
+            Manage OpenAPI specifications and generate configurations for your APIs
+        </p>
+    </div>
+
+    <!-- Upload form card -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                Upload OpenAPI Specification
+            </h3>
+            <form action="/ui/upload" method="post" enctype="multipart/form-data" class="space-y-4">
+                <div>
+                    <label for="api_name" class="block text-sm font-medium text-gray-700">API Name</label>
+                    <input type="text" 
+                           name="api_name" 
+                           id="api_name"
+                           required
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm border px-3 py-2">
+                </div>
+                <div>
+                    <label for="base_url" class="block text-sm font-medium text-gray-700">Base URL</label>
+                    <input type="url" 
+                           name="base_url" 
+                           id="base_url"
+                           required
+                           placeholder="https://api.example.com"
+                           class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary sm:text-sm border px-3 py-2">
+                </div>
+                <div>
+                    <label for="openapi_file" class="block text-sm font-medium text-gray-700">OpenAPI File</label>
+                    <input type="file" 
+                           name="openapi_file" 
+                           id="openapi_file"
+                           accept=".yaml,.yml,.json" 
+                           required
+                           class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-white hover:file:bg-blue-600">
+                </div>
+                <div>
+                    <button type="submit" 
+                            class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+                        Upload & Generate Config
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Quick actions card -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                Quick Actions
+            </h3>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <a href="/ui/apis" 
+                   class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+                    <div class="flex-shrink-0">
+                        <div class="h-10 w-10 rounded-lg bg-primary flex items-center justify-center">
+                            <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <span class="absolute inset-0" aria-hidden="true"></span>
+                        <p class="text-sm font-medium text-gray-900">View Configured APIs</p>
+                        <p class="text-sm text-gray-500">See all configured API endpoints</p>
+                    </div>
+                </a>
+
+                <a href="/api/list" 
+                   class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+                    <div class="flex-shrink-0">
+                        <div class="h-10 w-10 rounded-lg bg-green-500 flex items-center justify-center">
+                            <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <span class="absolute inset-0" aria-hidden="true"></span>
+                        <p class="text-sm font-medium text-gray-900">API List (JSON)</p>
+                        <p class="text-sm text-gray-500">Raw API list endpoint</p>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- System status card -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
+                System Status
+            </h3>
+            <div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
+                <div class="text-center">
+                    <a href="/health" class="text-primary hover:text-blue-700 text-sm font-medium">Health Check</a>
+                </div>
+                <div class="text-center">
+                    <a href="/stats" class="text-primary hover:text-blue-700 text-sm font-medium">Statistics</a>
+                </div>
+                <div class="text-center">
+                    <span class="text-green-600 text-sm font-medium">Server Online</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

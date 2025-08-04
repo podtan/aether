@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Aether Config Manager{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#1f2937'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-gray-50">
+    <div class="min-h-full">
+        <!-- Navigation -->
+        <nav class="bg-secondary shadow-sm">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between h-16">
+                    <div class="flex items-center">
+                        <h1 class="text-xl font-semibold text-white">Aether Config Manager</h1>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <a href="/" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Home</a>
+                        <a href="/apis" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">APIs</a>
+                        <a href="/health" class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium">Health</a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main content -->
+        <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+            <div class="px-4 py-6 sm:px-0">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+</body>
+</html>
