@@ -4,7 +4,6 @@ use askama::Template;
 use axum::{
     extract::{Multipart, State},
     http::StatusCode,
-    middleware,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -12,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{MemoryStore, SessionManagerLayer};
 use tracing::{error, info};
 
 use aether_config::AetherConfig;
@@ -22,6 +21,9 @@ use aether_config::generator;
 
 mod auth;
 pub use auth::{AuthState, UserInfo, UserRole};
+
+#[cfg(test)]
+mod tests;
 
 /// Application state combining web and auth functionality
 #[derive(Clone)]
@@ -130,28 +132,6 @@ impl IntoResponse for UploadResultTemplate {
     }
 }
 
-/// Authentication middleware to protect routes
-async fn auth_middleware(
-    session: Session,
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Response {
-    let user = auth::get_current_user(&session).await;
-    
-    // Allow access to login, auth routes, and public endpoints
-    let path = request.uri().path();
-    if path.starts_with("/auth/") || path == "/login" || path.starts_with("/health") {
-        return next.run(request).await;
-    }
-    
-    // Require authentication for all other routes
-    if user.is_none() {
-        return Redirect::to("/login").into_response();
-    }
-    
-    next.run(request).await
-}
-
 /// Create the web UI router with authentication
 pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
     let app_state = AppState::new(config).await?;
@@ -165,25 +145,19 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false) // Set to true in production with HTTPS
         .with_http_only(true)
-        .with_name(&session_config.cookie_name);
-
-    // Create protected routes with middleware
-    let protected_routes = Router::new()
-        .route("/", get(home_page))
-        .route("/upload", post(handle_upload_openapi))
-        .route("/apis", get(handle_list_apis))
-        .layer(middleware::from_fn(auth_middleware));
+        .with_name(session_config.cookie_name.clone());
 
     let router = Router::new()
-        // Public routes (no auth required)
+        // Public routes
+        .route("/", get(home_page))
         .route("/login", get(login_redirect))
         .route("/health", get(health_check))
+        .route("/upload", post(handle_upload_openapi))
+        .route("/apis", get(handle_list_apis))
         
         // Auth routes
         .nest("/auth", auth::create_auth_router())
         
-        // Protected routes
-        .merge(protected_routes)
         .with_state(app_state)
         .layer(session_layer);
 
@@ -201,10 +175,7 @@ async fn health_check() -> impl IntoResponse {
 }
 
 /// Main dashboard page  
-async fn home_page(
-    State(_app_state): State<AppState>,
-    _session: Session,
-) -> impl IntoResponse {
+async fn home_page() -> impl IntoResponse {
     HomeTemplate
 }
 
@@ -308,7 +279,6 @@ async fn handle_upload_openapi(
 /// List all configured APIs
 async fn handle_list_apis(
     State(app_state): State<AppState>,
-    _session: Session,
 ) -> impl IntoResponse {
     let configs = app_state.web.configs.read().await;
     let configs_vec: Vec<ConfigInfo> = configs.values().cloned().collect();
