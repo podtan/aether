@@ -233,6 +233,7 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
         },
         apis: std::collections::HashMap::new(),
         tools: std::collections::HashMap::new(),
+        enhanced_tools: std::collections::HashMap::new(),
     };
     
     let server = McpServer::new(config).await?;

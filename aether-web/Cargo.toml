@@ -18,5 +18,6 @@ tower-http = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+askama = "0.12"
 aether-config = { path = "../aether-config" }
 aether-core = { path = "../aether-core" }

@@ -4,7 +4,7 @@
 
 use crate::{McpServer, multi_server::MultiConfigServer, protocol::McpRequest};
 use aether_config::generator;
-use aether_web::{WebState, create_router as create_web_router};
+use aether_web::WebState;
 use axum::{
     extract::{Query, State, Path as AxumPath},
     http::StatusCode,
@@ -436,9 +436,6 @@ impl MultiConfigTransport {
             web_state: self.web_state.clone(),
         };
 
-        // Create web interface router (not used in this approach)
-        let _web_router = create_web_router(self.web_state.clone());
-
         let app = Router::new()
             // Legacy single-API endpoints (for backwards compatibility)
             .route("/message", post(handle_single_message))
@@ -462,11 +459,11 @@ impl MultiConfigTransport {
             .route("/health", get(handle_multi_health))
             .route("/stats", get(handle_all_stats))
 
-            // Web UI routes (separate from API routes)
+            // Web UI routes directly handled here but using templates
             .route("/ui", get(|| async { axum::response::Redirect::permanent("/ui/") }))
-            .route("/ui/", get(web_home_page))
-            .route("/ui/upload", post(web_upload_handler))
-            .route("/ui/apis", get(web_list_apis_handler))
+            .route("/ui/", get(handle_web_home))
+            .route("/ui/upload", post(handle_web_upload))
+            .route("/ui/apis", get(handle_web_apis))
             
             // Root redirect to UI
             .route("/", get(|| async { axum::response::Redirect::permanent("/ui/") }))
@@ -663,7 +660,6 @@ async fn handle_multi_sse(
 
 use futures::Stream;
 
-
 /// Handle API upload
 async fn handle_upload_openapi(
     State(app_state): State<MultiAppState>,
@@ -842,122 +838,32 @@ struct UpdateConfigRequest {
     openapi_content: Option<String>,
 }
 
+/// Web UI handlers using templates from aether-web but with MultiAppState
 
-/// Web UI handlers that use MultiAppState
-
-/// Web home page
-async fn web_home_page() -> axum::response::Html<&'static str> {
-    axum::response::Html(r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Aether Config Manager</title>
-    <style>
-        body { font-family: system-ui, sans-serif; margin: 2rem; }
-        .card { border: 1px solid #ddd; padding: 1rem; margin: 1rem 0; border-radius: 8px; }
-        .btn { background: #007bff; color: white; padding: 0.5rem 1rem; border: none; border-radius: 4px; }
-        .success { color: green; background: #d4edda; padding: 0.75rem; border-radius: 4px; }
-        .error { color: red; background: #f8d7da; padding: 0.75rem; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <h1>Aether Multi-Config Manager</h1>
-    
-    <div class="card">
-        <h2>Upload OpenAPI Specification</h2>
-        <form action="/ui/upload" method="post" enctype="multipart/form-data">
-            <div>
-                <label>API Name:</label>
-                <input type="text" name="api_name" required>
-            </div>
-            <div>
-                <label>Base URL:</label>
-                <input type="url" name="base_url" required>
-            </div>
-            <div>
-                <label>OpenAPI File:</label>
-                <input type="file" name="openapi_file" accept=".yaml,.yml,.json" required>
-            </div>
-            <button type="submit" class="btn">Upload & Generate Config</button>
-        </form>
-    </div>
-
-    <div class="card">
-        <h2>Configured APIs</h2>
-        <a href="/ui/apis">View Configured APIs</a>
-    </div>
-
-    <div class="card">
-        <h2>API Management</h2>
-        <p>Health: <a href="/health">/health</a></p>
-        <p>Stats: <a href="/stats">/stats</a></p>
-        <p>API List: <a href="/api/list">/api/list</a></p>
-    </div>
-</body>
-</html>"#)
+/// Web home page using Askama template  
+async fn handle_web_home() -> impl axum::response::IntoResponse {
+    aether_web::render_home()
 }
 
-/// Web upload handler
-async fn web_upload_handler(
-    State(app_state): State<MultiAppState>, 
-    mut multipart: axum::extract::Multipart
-) -> Result<axum::response::Html<String>, StatusCode> {
-    let mut api_name = String::new();
-    let mut base_url = String::new();
-    let mut openapi_content = String::new();
-
-    // Process form data
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or_default();
-        match name {
-            "api_name" => api_name = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
-            "base_url" => base_url = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
-            "openapi_file" => openapi_content = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
-            _ => {}
+/// Web upload handler that integrates with multi-server
+async fn handle_web_upload(
+    State(app_state): State<MultiAppState>,
+    multipart: axum::extract::Multipart,
+) -> impl axum::response::IntoResponse {
+    aether_web::handle_upload_with_multi_server(
+        multipart, 
+        &app_state.web_state,
+        |api_name, config, openapi_content| async move {
+            app_state.multi_server.add_api_config(&api_name, config, &openapi_content)
+                .await
+                .map_err(|e| e.to_string())
         }
-    }
-
-    if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return Ok(axum::response::Html(format!(
-            r#"<div class="error">Missing fields. <a href="/ui/">Go back</a></div>"#
-        )));
-    }
-
-    match generator::generate_config_from_openapi(&openapi_content, &api_name, &base_url).await {
-        Ok(config) => {
-            match app_state.multi_server.add_api_config(&api_name, config, &openapi_content).await {
-                Ok(()) => Ok(axum::response::Html(format!(
-                    r#"<div class="success">Successfully configured API: {}. <a href="/ui/">Back to home</a></div>"#,
-                    api_name
-                ))),
-                Err(e) => Ok(axum::response::Html(format!(
-                    r#"<div class="error">Failed to add config: {}. <a href="/ui/">Go back</a></div>"#,
-                    e
-                )))
-            }
-        }
-        Err(e) => Ok(axum::response::Html(format!(
-            r#"<div class="error">Failed to generate config: {}. <a href="/ui/">Go back</a></div>"#,
-            e
-        )))
-    }
+    ).await
 }
 
-/// Web API list handler
-async fn web_list_apis_handler(State(app_state): State<MultiAppState>) -> axum::response::Html<String> {
-    let apis = app_state.multi_server.list_apis().await;
-    
-    if apis.is_empty() {
-        return axum::response::Html(r#"<h1>No APIs configured</h1><a href="/ui/">Go back</a>"#.to_string());
-    }
-
-    let mut html = String::from(r#"<h1>Configured APIs</h1>"#);
-    for api_name in apis {
-        html.push_str(&format!(
-            r#"<div class="card"><h3>{}</h3><p>SSE Endpoint: <a href="/{}/sse">/{}/sse</a></p></div>"#,
-            api_name, api_name, api_name
-        ));
-    }
-    html.push_str(r#"<a href="/ui/">Back to home</a>"#);
-    axum::response::Html(html)
+/// Web API list handler using templates
+async fn handle_web_apis(State(app_state): State<MultiAppState>) -> impl axum::response::IntoResponse {
+    aether_web::render_apis(&app_state.web_state).await
 }
+
 
