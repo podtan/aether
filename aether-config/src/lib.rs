@@ -8,6 +8,7 @@ use tracing::info;
 
 pub mod openapi;
 pub mod generator;
+pub mod directory;
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]

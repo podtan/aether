@@ -16,6 +16,7 @@ aether-core = { path = "../aether-core" }
 aether-config = { path = "../aether-config" }
 aether-api = { path = "../aether-api" }
 aether-auth = { path = "../aether-auth" }
+aether-web = { path = "../aether-web" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -29,6 +30,7 @@ hyper = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }
 uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
 rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
 tokio-stream = "0.1"
 
