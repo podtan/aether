@@ -19,6 +19,12 @@ pub struct AetherConfig {
     #[serde(default)]
     pub enhanced_tools: HashMap<String, EnhancedToolConfig>,
     pub apis: HashMap<String, ApiConfig>,
+    #[serde(default)]
+    pub oidc: Option<OidcConfig>,
+    #[serde(default)]
+    pub session: Option<SessionConfig>,
+    #[serde(default)]
+    pub dev: Option<DevConfig>,
 }
 
 /// Server configuration
@@ -44,6 +50,71 @@ pub struct ApiAuthentication {
     #[serde(rename = "type")]
     pub auth_type: String,
     pub headers: Option<HashMap<String, String>>,
+}
+
+/// OIDC configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    pub provider: String,
+    pub issuer_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_url: String,
+    #[serde(default = "default_code_challenge_method")]
+    pub code_challenge_method: String,
+    #[serde(default = "default_scope")]
+    pub scope: String,
+}
+
+/// Session configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfig {
+    pub secret_key: String,
+    #[serde(default = "default_cookie_name")]
+    pub cookie_name: String,
+    #[serde(default = "default_max_age")]
+    pub max_age: u64, // in seconds
+}
+
+/// Development configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DevConfig {
+    #[serde(default)]
+    pub local_dev_mode: bool,
+    #[serde(default = "default_dev_email")]
+    pub local_dev_email: String,
+    #[serde(default = "default_dev_role")]
+    pub local_dev_role: String,
+    #[serde(default = "default_dev_name")]
+    pub local_dev_name: String,
+}
+
+fn default_code_challenge_method() -> String {
+    "S256".to_string()
+}
+
+fn default_scope() -> String {
+    "openid email profile".to_string()
+}
+
+fn default_cookie_name() -> String {
+    "aether_web_session".to_string()
+}
+
+fn default_max_age() -> u64 {
+    28800 // 8 hours
+}
+
+fn default_dev_email() -> String {
+    "developer@example.com".to_string()
+}
+
+fn default_dev_role() -> String {
+    "user".to_string()
+}
+
+fn default_dev_name() -> String {
+    "Local Developer".to_string()
 }
 
 impl ApiAuthentication {
@@ -153,6 +224,24 @@ impl AetherConfig {
             tools: HashMap::new(),
             enhanced_tools: HashMap::new(),
             apis: HashMap::new(),
+            oidc: None,
+            session: None,
+            dev: None,
         }
+    }
+
+    /// Load configuration from TOML file
+    pub async fn load_toml_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        info!("Loading TOML configuration from {:?}", path.as_ref());
+        
+        let content = tokio::fs::read_to_string(path).await
+            .map_err(|e| AetherError::Configuration(format!("Failed to read config file: {}", e)))?;
+        
+        let config: AetherConfig = toml::from_str(&content)
+            .map_err(|e| AetherError::Configuration(format!("Failed to parse TOML config: {}", e)))?;
+        
+        config.validate()?;
+        info!("TOML configuration loaded successfully");
+        Ok(config)
     }
 }

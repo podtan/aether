@@ -76,6 +76,9 @@ pub async fn generate_config_from_openapi(
         tools: HashMap::new(), // Use enhanced_tools instead
         enhanced_tools,
         apis,
+        oidc: None,
+        session: None,
+        dev: None,
     };
 
     info!("🎉 Successfully generated Aether configuration");

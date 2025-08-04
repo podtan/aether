@@ -4,17 +4,31 @@ use askama::Template;
 use axum::{
     extract::{Multipart, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    middleware,
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 use tracing::{error, info};
+
+use aether_config::AetherConfig;
 
 // Re-export the MultiConfigServer for use in public functions
 use aether_config::generator;
+
+mod auth;
+pub use auth::{AuthState, UserInfo, UserRole};
+
+/// Application state combining web and auth functionality
+#[derive(Clone)]
+pub struct AppState {
+    pub web: WebState,
+    pub auth: AuthState,
+}
 
 /// Configuration management state
 #[derive(Clone)]
@@ -33,6 +47,18 @@ pub struct ConfigInfo {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl AppState {
+    pub async fn new(config: &AetherConfig) -> anyhow::Result<Self> {
+        let web = WebState::new();
+        let auth = AuthState::new(
+            config.oidc.as_ref(), 
+            config.dev.clone()
+        ).await?;
+        
+        Ok(Self { web, auth })
+    }
+}
+
 impl WebState {
     pub fn new() -> Self {
         Self {
@@ -47,6 +73,22 @@ impl WebState {
 pub struct HomeTemplate;
 
 impl IntoResponse for HomeTemplate {
+    fn into_response(self) -> Response {
+        match self.render() {
+            Ok(html) => Html(html).into_response(),
+            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", err)).into_response(),
+        }
+    }
+}
+
+/// Login page template
+#[derive(Template)]
+#[template(path = "login.html")]
+pub struct LoginTemplate {
+    is_dev_mode: bool,
+}
+
+impl IntoResponse for LoginTemplate {
     fn into_response(self) -> Response {
         match self.render() {
             Ok(html) => Html(html).into_response(),
@@ -88,23 +130,87 @@ impl IntoResponse for UploadResultTemplate {
     }
 }
 
-/// Create the web UI router
-pub fn create_router(state: WebState) -> Router {
-    Router::new()
+/// Authentication middleware to protect routes
+async fn auth_middleware(
+    session: Session,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let user = auth::get_current_user(&session).await;
+    
+    // Allow access to login, auth routes, and public endpoints
+    let path = request.uri().path();
+    if path.starts_with("/auth/") || path == "/login" || path.starts_with("/health") {
+        return next.run(request).await;
+    }
+    
+    // Require authentication for all other routes
+    if user.is_none() {
+        return Redirect::to("/login").into_response();
+    }
+    
+    next.run(request).await
+}
+
+/// Create the web UI router with authentication
+pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
+    let app_state = AppState::new(config).await?;
+    
+    // Session configuration
+    let session_config = config.session.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Session configuration is required")
+    })?;
+    
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false) // Set to true in production with HTTPS
+        .with_http_only(true)
+        .with_name(&session_config.cookie_name);
+
+    // Create protected routes with middleware
+    let protected_routes = Router::new()
         .route("/", get(home_page))
         .route("/upload", post(handle_upload_openapi))
         .route("/apis", get(handle_list_apis))
-        .with_state(state)
+        .layer(middleware::from_fn(auth_middleware));
+
+    let router = Router::new()
+        // Public routes (no auth required)
+        .route("/login", get(login_redirect))
+        .route("/health", get(health_check))
+        
+        // Auth routes
+        .nest("/auth", auth::create_auth_router())
+        
+        // Protected routes
+        .merge(protected_routes)
+        .with_state(app_state)
+        .layer(session_layer);
+
+    Ok(router)
+}
+
+/// Redirect to login page
+async fn login_redirect() -> impl IntoResponse {
+    Redirect::to("/auth/login")
+}
+
+/// Health check endpoint
+async fn health_check() -> impl IntoResponse {
+    "OK"
 }
 
 /// Main dashboard page  
-async fn home_page() -> impl IntoResponse {
+async fn home_page(
+    State(_app_state): State<AppState>,
+    _session: Session,
+) -> impl IntoResponse {
     HomeTemplate
 }
 
 /// Handle OpenAPI file upload
 async fn handle_upload_openapi(
-    State(state): State<WebState>,
+    State(app_state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let mut api_name = String::new();
@@ -172,7 +278,7 @@ async fn handle_upload_openapi(
                         updated_at: chrono::Utc::now(),
                     };
 
-                    state.configs.write().await.insert(api_name.clone(), config_info);
+                    app_state.web.configs.write().await.insert(api_name.clone(), config_info);
                     info!("Generated config for API: {}", api_name);
 
                     UploadResultTemplate {
@@ -200,8 +306,11 @@ async fn handle_upload_openapi(
 }
 
 /// List all configured APIs
-async fn handle_list_apis(State(state): State<WebState>) -> impl IntoResponse {
-    let configs = state.configs.read().await;
+async fn handle_list_apis(
+    State(app_state): State<AppState>,
+    _session: Session,
+) -> impl IntoResponse {
+    let configs = app_state.web.configs.read().await;
     let configs_vec: Vec<ConfigInfo> = configs.values().cloned().collect();
     
     ApiListTemplate {
