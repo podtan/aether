@@ -19,9 +19,11 @@ use crate::protocol::{McpRequest, McpResponse, McpError, ListToolsParams, CallTo
 pub mod server;
 pub mod protocol;
 pub mod transport;
+pub mod multi_server;
 
 // Re-export core structures  
-pub use transport::{HttpSseTransport, StdioTransport};
+pub use transport::{HttpSseTransport, StdioTransport, MultiConfigTransport};
+pub use multi_server::MultiConfigServer;
 
 /// Internal tool definition with operation and API context
 #[derive(Debug, Clone)]

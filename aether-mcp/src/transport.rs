@@ -2,10 +2,11 @@
 //! 
 //! Supports both stdio and HTTP SSE (Server-Sent Events) transports
 
-use crate::{McpServer, protocol::McpRequest};
+use crate::{McpServer, multi_server::MultiConfigServer, protocol::McpRequest};
 use aether_config::generator;
+use aether_web::{WebState, create_router as create_web_router};
 use axum::{
-    extract::{Query, State},
+    extract::{Query, State, Path as AxumPath},
     http::StatusCode,
     response::sse::{Event, Sse},
     routing::{get, post},
@@ -188,17 +189,11 @@ async fn handle_sse(
     let connection_id = params.get("session_id")
         .map(|s| s.clone())
         .unwrap_or_else(|| {
-            // Generate a UUID-like session ID similar to working servers
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-            let rand_part = timestamp % 1000000;
-            format!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", 
-                timestamp & 0xffffffff,
-                (timestamp >> 32) & 0xffff,
-                (timestamp >> 48) & 0xffff, 
-                rand_part & 0xffff,
-                timestamp >> 16
-            )
+            // Generate a simple session ID
+            format!("session_{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs())
         });
     
     debug!("Created new session with ID: {}", connection_id);
@@ -415,3 +410,554 @@ impl StdioTransport {
         Ok(())
     }
 }
+
+/// Multi-Configuration HTTP Transport for serving multiple APIs
+pub struct MultiConfigTransport {
+    multi_server: Arc<MultiConfigServer>,
+    web_state: WebState,
+    port: u16,
+}
+
+impl MultiConfigTransport {
+    /// Create a new multi-config HTTP transport
+    pub fn new(multi_server: MultiConfigServer, port: u16) -> Self {
+        Self {
+            multi_server: Arc::new(multi_server),
+            web_state: WebState::new(),
+            port,
+        }
+    }
+
+    /// Start the HTTP server with multi-config support
+    pub async fn start(self) -> anyhow::Result<()> {
+        let multi_state = MultiAppState {
+            multi_server: self.multi_server,
+            sse_state: SseState::new(),
+            web_state: self.web_state.clone(),
+        };
+
+        // Create web interface router (not used in this approach)
+        let _web_router = create_web_router(self.web_state.clone());
+
+        let app = Router::new()
+            // Legacy single-API endpoints (for backwards compatibility)
+            .route("/message", post(handle_single_message))
+            .route("/messages", post(handle_single_message))
+            .route("/sse", get(handle_single_sse))
+
+            // Multi-API endpoints  
+            .route("/{api_name}/message", post(handle_multi_message))
+            .route("/{api_name}/messages", post(handle_multi_message))
+            .route("/{api_name}/sse", get(handle_multi_sse))
+
+            // API management endpoints
+            .route("/api/generate-config", post(handle_generate_config))
+            .route("/api/upload-openapi", post(handle_upload_openapi))
+            .route("/api/list", get(handle_list_apis))
+            .route("/api/{api_name}/config", get(handle_get_config))
+            .route("/api/{api_name}/config", post(handle_update_config))
+            .route("/api/{api_name}/delete", post(handle_delete_api))
+
+            // Health and stats
+            .route("/health", get(handle_multi_health))
+            .route("/stats", get(handle_all_stats))
+
+            // Web UI routes (separate from API routes)
+            .route("/ui", get(|| async { axum::response::Redirect::permanent("/ui/") }))
+            .route("/ui/", get(web_home_page))
+            .route("/ui/upload", post(web_upload_handler))
+            .route("/ui/apis", get(web_list_apis_handler))
+            
+            // Root redirect to UI
+            .route("/", get(|| async { axum::response::Redirect::permanent("/ui/") }))
+            
+            .layer(
+                ServiceBuilder::new()
+                    .layer(TraceLayer::new_for_http())
+                    .layer(CorsLayer::permissive()),
+            )
+            .with_state(multi_state);
+
+        let addr = format!("0.0.0.0:{}", self.port);
+        info!("Starting Multi-Config MCP HTTP server on {}", addr);
+
+        let listener = tokio::net::TcpListener::bind(&addr).await
+            .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", addr, e))?;
+        axum::serve(listener, app).await
+            .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
+
+        Ok(())
+    }
+}
+/// Multi-app state for managing multiple configurations  
+#[derive(Clone)]
+struct MultiAppState {
+    multi_server: Arc<MultiConfigServer>,
+    sse_state: Arc<SseState>,
+    web_state: WebState,
+}
+
+/// Handle single-API messages (backwards compatibility)
+async fn handle_single_message(
+    State(app_state): State<MultiAppState>,
+    Query(params): Query<HashMap<String, String>>,
+    Json(request): Json<McpRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    // For backwards compatibility, use the first available API
+    let apis = app_state.multi_server.list_apis().await;
+    if let Some(first_api) = apis.first() {
+        handle_api_message(&app_state, first_api, params, request).await
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+/// Handle multi-API messages
+async fn handle_multi_message(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+    Json(request): Json<McpRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    handle_api_message(&app_state, &api_name, params, request).await
+}
+
+/// Common message handling logic
+async fn handle_api_message(
+    app_state: &MultiAppState,
+    api_name: &str,
+    params: HashMap<String, String>,
+    request: McpRequest,
+) -> Result<Json<Value>, StatusCode> {
+    debug!("Received MCP request for API {}: {}", api_name, request.method);
+
+    // Get the MCP server for this API
+    let server = app_state.multi_server.get_server(api_name).await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Check if this is a session-based request
+    if let Some(session_id) = params.get("session_id") {
+        let session_key = format!("{}:{}", api_name, session_id);
+        debug!("Handling POST message for session: {}", session_key);
+        
+        // Handle the request
+        let response = server.handle_request(request).await;
+        debug!("Generated MCP response for API {}: {:?}", api_name, response);
+        
+        // Send response via SSE if session exists
+        if let Ok(connections) = app_state.sse_state.connections.try_read() {
+            if let Some(sender) = connections.get(&session_key) {
+                let response_json = serde_json::to_string(&response).unwrap_or_default();
+                let event = Event::default()
+                    .event("message")
+                    .data(response_json.clone());
+                
+                debug!("Sending JSON-RPC response via SSE for API {}", api_name);
+                
+                if let Err(e) = sender.send(event) {
+                    warn!("Failed to send response to SSE session {}: {}", session_key, e);
+                } else {
+                    debug!("Sent MCP response to SSE session: {}", session_key);
+                }
+            } else {
+                warn!("SSE session not found: {}", session_key);
+            }
+        }
+        
+        return Ok(Json(serde_json::json!({"status": "accepted"})));
+    }
+
+    // Non-session request - handle normally
+    let response = server.handle_request(request).await;
+    Ok(Json(serde_json::to_value(response).unwrap_or_default()))
+}
+
+/// Handle single-API SSE (backwards compatibility)
+async fn handle_single_sse(
+    State(app_state): State<MultiAppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<(axum::http::HeaderMap, Sse<impl Stream<Item = Result<Event, Infallible>>>), StatusCode> {
+    // For backwards compatibility, use the first available API
+    let apis = app_state.multi_server.list_apis().await;
+    if let Some(first_api) = apis.first() {
+        handle_multi_sse(State(app_state), AxumPath(first_api.clone()), Query(params)).await
+    } else {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+/// Handle multi-API SSE connections
+async fn handle_multi_sse(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<(axum::http::HeaderMap, Sse<impl Stream<Item = Result<Event, Infallible>>>), StatusCode> {
+    debug!("New SSE connection request for API: {}", api_name);
+
+    // Verify API exists
+    if app_state.multi_server.get_server(&api_name).await.is_none() {
+        warn!("SSE connection requested for unknown API: {}", api_name);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let session_id = params.get("session_id")
+        .map(|s| s.clone())
+        .unwrap_or_else(|| format!("session_{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()));
+
+    let session_key = format!("{}:{}", api_name, session_id);
+    info!("Establishing SSE connection for API {} with session: {}", api_name, session_key);
+    
+    let (tx, rx) = mpsc::unbounded_channel();
+    
+    // Store the sender for this session
+    app_state.sse_state.connections.write().await.insert(session_key.clone(), tx.clone());
+    
+    // CRITICAL: Send the endpoint event that rmcp client is waiting for
+    let endpoint_url = format!("/{}/messages?session_id={}", api_name, session_id);
+    let endpoint_event = Event::default()
+        .event("endpoint")
+        .data(endpoint_url);
+    
+    debug!("Sending endpoint event with URL: /{}/messages?session_id={}", api_name, session_id);
+    if let Err(e) = tx.send(endpoint_event) {
+        error!("Failed to send endpoint event: {}", e);
+    }
+
+    // Start a keep-alive ping task for this connection (like single-config version)
+    let ping_tx = tx.clone();
+    let ping_session_key = session_key.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let ping_event = Event::default()
+                .event("ping")
+                .data("keep-alive");
+            
+            if ping_tx.send(ping_event).is_err() {
+                debug!("SSE connection {} closed, stopping ping task", ping_session_key);
+                break;
+            }
+        }
+    });
+    
+    // Create the stream
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
+        .map(|event| Ok(event));
+    
+    // Set headers for SSE - match the single-config version format
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-session-id", session_id.parse().unwrap());
+    headers.insert("cache-control", "no-cache".parse().unwrap());
+    headers.insert("connection", "keep-alive".parse().unwrap());
+    headers.insert("content-type", "text/event-stream".parse().unwrap());
+    headers.insert("access-control-allow-origin", "*".parse().unwrap());
+    headers.insert("access-control-allow-headers", "*".parse().unwrap());
+    
+    Ok((headers, Sse::new(stream)))
+}
+
+
+use futures::Stream;
+
+
+/// Handle API upload
+async fn handle_upload_openapi(
+    State(app_state): State<MultiAppState>,
+    Json(request): Json<UploadRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    info!("Uploading OpenAPI spec for API: {}", request.api_name);
+
+    // Generate config using the existing generator
+    match generator::generate_config_from_openapi(
+        &request.openapi_content,
+        &request.api_name,
+        &request.base_url,
+    ).await {
+        Ok(config) => {
+            // Add the configuration to the multi-server
+            match app_state.multi_server.add_api_config(
+                &request.api_name,
+                config,
+                &request.openapi_content,
+            ).await {
+                Ok(()) => {
+                    info!("Successfully added API configuration: {}", request.api_name);
+                    
+                    // Also update web state for UI
+                    let config_info = aether_web::ConfigInfo {
+                        api_name: request.api_name.clone(),
+                        openapi_content: request.openapi_content,
+                        config_content: "".to_string(), // Will be loaded from disk if needed
+                        base_url: request.base_url,
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                    };
+                    app_state.web_state.configs.write().await.insert(request.api_name.clone(), config_info);
+                    
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "message": format!("API {} configured successfully", request.api_name),
+                        "api_name": request.api_name
+                    })))
+                }
+                Err(e) => {
+                    error!("Failed to add API configuration: {}", e);
+                    Ok(Json(serde_json::json!({
+                        "success": false,
+                        "error": format!("Failed to add API configuration: {}", e)
+                    })))
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to generate config: {}", e);
+            Ok(Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to generate config: {}", e)
+            })))
+        }
+    }
+}
+
+/// List all configured APIs
+async fn handle_list_apis(
+    State(app_state): State<MultiAppState>,
+) -> Json<Value> {
+    let apis = app_state.multi_server.list_apis().await;
+    Json(serde_json::json!({
+        "apis": apis
+    }))
+}
+
+/// Get configuration for an API
+async fn handle_get_config(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+) -> Result<Json<Value>, StatusCode> {
+    match app_state.multi_server.get_api_config(&api_name).await {
+        Ok((config, openapi_content)) => {
+            Ok(Json(serde_json::json!({
+                "api_name": api_name,
+                "config": config,
+                "openapi_content": openapi_content
+            })))
+        }
+        Err(_) => Err(StatusCode::NOT_FOUND)
+    }
+}
+
+/// Update configuration for an API
+async fn handle_update_config(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+    Json(request): Json<UpdateConfigRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    match app_state.multi_server.update_api_config(
+        &api_name,
+        request.config,
+        &request.openapi_content.unwrap_or_default(),
+    ).await {
+        Ok(()) => {
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("Configuration updated for API: {}", api_name)
+            })))
+        }
+        Err(e) => {
+            error!("Failed to update config for API {}: {}", api_name, e);
+            Ok(Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to update configuration: {}", e)
+            })))
+        }
+    }
+}
+
+/// Delete an API configuration
+async fn handle_delete_api(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+) -> Result<Json<Value>, StatusCode> {
+    match app_state.multi_server.remove_api_config(&api_name).await {
+        Ok(()) => {
+            // Also remove from web state
+            app_state.web_state.configs.write().await.remove(&api_name);
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("API {} deleted successfully", api_name)
+            })))
+        }
+        Err(e) => {
+            error!("Failed to delete API {}: {}", api_name, e);
+            Ok(Json(serde_json::json!({
+                "success": false,
+                "error": format!("Failed to delete API: {}", e)
+            })))
+        }
+    }
+}
+
+/// Multi-config health check
+async fn handle_multi_health(
+    State(app_state): State<MultiAppState>,
+) -> Json<Value> {
+    let apis = app_state.multi_server.list_apis().await;
+    let connection_count = app_state.sse_state.connections.read().await.len();
+    
+    Json(serde_json::json!({
+        "status": "healthy",
+        "server": "aether-mcp-multi",
+        "version": env!("CARGO_PKG_VERSION"),
+        "configured_apis": apis.len(),
+        "apis": apis,
+        "sse_connections": connection_count
+    }))
+}
+
+/// Get all API statistics
+async fn handle_all_stats(
+    State(app_state): State<MultiAppState>,
+) -> Json<Value> {
+    let stats = app_state.multi_server.get_all_stats().await;
+    Json(serde_json::json!(stats))
+}
+
+/// Request payload for OpenAPI upload
+#[derive(Debug, Deserialize)]
+struct UploadRequest {
+    api_name: String,
+    base_url: String,
+    openapi_content: String,
+}
+
+/// Request payload for config updates
+#[derive(Debug, Deserialize)]
+struct UpdateConfigRequest {
+    config: aether_config::AetherConfig,
+    openapi_content: Option<String>,
+}
+
+
+/// Web UI handlers that use MultiAppState
+
+/// Web home page
+async fn web_home_page() -> axum::response::Html<&'static str> {
+    axum::response::Html(r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Aether Config Manager</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; }
+        .card { border: 1px solid #ddd; padding: 1rem; margin: 1rem 0; border-radius: 8px; }
+        .btn { background: #007bff; color: white; padding: 0.5rem 1rem; border: none; border-radius: 4px; }
+        .success { color: green; background: #d4edda; padding: 0.75rem; border-radius: 4px; }
+        .error { color: red; background: #f8d7da; padding: 0.75rem; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>Aether Multi-Config Manager</h1>
+    
+    <div class="card">
+        <h2>Upload OpenAPI Specification</h2>
+        <form action="/ui/upload" method="post" enctype="multipart/form-data">
+            <div>
+                <label>API Name:</label>
+                <input type="text" name="api_name" required>
+            </div>
+            <div>
+                <label>Base URL:</label>
+                <input type="url" name="base_url" required>
+            </div>
+            <div>
+                <label>OpenAPI File:</label>
+                <input type="file" name="openapi_file" accept=".yaml,.yml,.json" required>
+            </div>
+            <button type="submit" class="btn">Upload & Generate Config</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Configured APIs</h2>
+        <a href="/ui/apis">View Configured APIs</a>
+    </div>
+
+    <div class="card">
+        <h2>API Management</h2>
+        <p>Health: <a href="/health">/health</a></p>
+        <p>Stats: <a href="/stats">/stats</a></p>
+        <p>API List: <a href="/api/list">/api/list</a></p>
+    </div>
+</body>
+</html>"#)
+}
+
+/// Web upload handler
+async fn web_upload_handler(
+    State(app_state): State<MultiAppState>, 
+    mut multipart: axum::extract::Multipart
+) -> Result<axum::response::Html<String>, StatusCode> {
+    let mut api_name = String::new();
+    let mut base_url = String::new();
+    let mut openapi_content = String::new();
+
+    // Process form data
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or_default();
+        match name {
+            "api_name" => api_name = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
+            "base_url" => base_url = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
+            "openapi_file" => openapi_content = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?,
+            _ => {}
+        }
+    }
+
+    if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
+        return Ok(axum::response::Html(format!(
+            r#"<div class="error">Missing fields. <a href="/ui/">Go back</a></div>"#
+        )));
+    }
+
+    match generator::generate_config_from_openapi(&openapi_content, &api_name, &base_url).await {
+        Ok(config) => {
+            match app_state.multi_server.add_api_config(&api_name, config, &openapi_content).await {
+                Ok(()) => Ok(axum::response::Html(format!(
+                    r#"<div class="success">Successfully configured API: {}. <a href="/ui/">Back to home</a></div>"#,
+                    api_name
+                ))),
+                Err(e) => Ok(axum::response::Html(format!(
+                    r#"<div class="error">Failed to add config: {}. <a href="/ui/">Go back</a></div>"#,
+                    e
+                )))
+            }
+        }
+        Err(e) => Ok(axum::response::Html(format!(
+            r#"<div class="error">Failed to generate config: {}. <a href="/ui/">Go back</a></div>"#,
+            e
+        )))
+    }
+}
+
+/// Web API list handler
+async fn web_list_apis_handler(State(app_state): State<MultiAppState>) -> axum::response::Html<String> {
+    let apis = app_state.multi_server.list_apis().await;
+    
+    if apis.is_empty() {
+        return axum::response::Html(r#"<h1>No APIs configured</h1><a href="/ui/">Go back</a>"#.to_string());
+    }
+
+    let mut html = String::from(r#"<h1>Configured APIs</h1>"#);
+    for api_name in apis {
+        html.push_str(&format!(
+            r#"<div class="card"><h3>{}</h3><p>SSE Endpoint: <a href="/{}/sse">/{}/sse</a></p></div>"#,
+            api_name, api_name, api_name
+        ));
+    }
+    html.push_str(r#"<a href="/ui/">Back to home</a>"#);
+    axum::response::Html(html)
+}
+

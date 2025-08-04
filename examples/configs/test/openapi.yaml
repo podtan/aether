@@ -1,0 +1,14 @@
+openapi: 3.0.0
+info:
+  title: Test API
+  version: 1.0.0
+servers:
+  - url: https://api.test.com
+paths:
+  /users:
+    get:
+      operationId: getUsers
+      summary: Get users
+      responses:
+        "200":
+          description: List of users

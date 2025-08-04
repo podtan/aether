@@ -7,7 +7,7 @@ members = [
     "aether-auth",
     "aether-bin",
     "aether-cli"
-]
+, "aether-web"]
 resolver = "2"
 
 [workspace.dependencies]
