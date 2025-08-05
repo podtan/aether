@@ -24,10 +24,10 @@ use anyhow;
 
 /// Request payload for config generation API
 #[derive(Debug, Deserialize)]
-struct GenerateConfigRequest {
-    openapi_content: String,
-    api_name: String,
-    base_url: String,
+pub struct GenerateConfigRequest {
+    pub openapi_content: String,
+    pub api_name: String,
+    pub base_url: String,
 }
 
 /// Global state for managing SSE connections
@@ -96,13 +96,13 @@ impl HttpSseTransport {
 
 /// Application state combining server and SSE state
 #[derive(Clone)]
-struct AppState {
-    server: Arc<McpServer>,
-    sse_state: Arc<SseState>,
+pub struct AppState {
+    pub server: Arc<McpServer>,
+    pub sse_state: Arc<SseState>,
 }
 
 /// Handle MCP messages via POST /message (session-based)
-async fn handle_message(
+pub async fn handle_message(
     State(app_state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     Json(request): Json<McpRequest>,
@@ -161,7 +161,7 @@ async fn handle_message(
 }
 
 /// Handle MCP messages via POST /sse (for SSE clients that send requests via POST)
-async fn handle_sse_message(
+pub async fn handle_sse_message(
     State(app_state): State<AppState>,
     Json(request): Json<McpRequest>,
 ) -> Result<Json<Value>, StatusCode> {
@@ -179,7 +179,7 @@ async fn handle_sse_message(
 }
 
 /// Handle SSE connections via GET /sse
-async fn handle_sse(
+pub async fn handle_sse(
     State(app_state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl axum::response::IntoResponse {
@@ -258,7 +258,7 @@ async fn handle_sse(
 }
 
 /// Handle config generation API
-async fn handle_generate_config(
+pub async fn handle_generate_config(
     Json(request): Json<GenerateConfigRequest>,
 ) -> Result<String, StatusCode> {
     info!("🔧 Received config generation request for API: {}", request.api_name);
@@ -294,7 +294,7 @@ async fn handle_generate_config(
 }
 
 /// Health check endpoint
-async fn health_check(State(app_state): State<AppState>) -> Json<Value> {
+pub async fn health_check(State(app_state): State<AppState>) -> Json<Value> {
     let stats = app_state.server.get_stats().await;
     let mut health = serde_json::Map::new();
     health.insert("status".to_string(), Value::String("healthy".to_string()));
@@ -428,6 +428,51 @@ impl MultiConfigTransport {
         }
     }
 
+    /// Create an app with web routes added
+    pub async fn create_app_with_web_routes(self, web_router: Router) -> anyhow::Result<Router> {
+        let multi_state = MultiAppState {
+            multi_server: self.multi_server,
+            sse_state: SseState::new(),
+            web_state: self.web_state.clone(),
+        };
+
+        let mcp_router = Router::new()
+            // Legacy single-API endpoints (for backwards compatibility)
+            .route("/message", post(handle_single_message))
+            .route("/messages", post(handle_single_message))
+            .route("/sse", get(handle_single_sse))
+
+            // Multi-API endpoints  
+            .route("/{api_name}/message", post(handle_multi_message))
+            .route("/{api_name}/messages", post(handle_multi_message))
+            .route("/{api_name}/sse", get(handle_multi_sse))
+
+            // API management endpoints
+            .route("/api/generate-config", post(handle_generate_config))
+            .route("/api/upload-openapi", post(handle_upload_openapi))
+            .route("/api/list", get(handle_list_apis))
+            .route("/api/{api_name}/config", get(handle_get_config))
+            .route("/api/{api_name}/config", post(handle_update_config))
+            .route("/api/{api_name}/delete", post(handle_delete_api))
+
+            // Health and stats
+            .route("/health", get(handle_multi_health))
+            .route("/stats", get(handle_all_stats))
+            .with_state(multi_state);
+
+        let app = Router::new()
+            .nest("/web", web_router)  // Web auth routes under /web
+            .route("/oauth2/callback", axum::routing::get(oauth2_callback_redirect))  // Handle OAuth2 callback redirects
+            .merge(mcp_router)  // Multi-config MCP routes at root level
+            .layer(
+                ServiceBuilder::new()
+                    .layer(TraceLayer::new_for_http())
+                    .layer(CorsLayer::permissive()),
+            );
+
+        Ok(app)
+    }
+
     /// Start the HTTP server with multi-config support
     pub async fn start(self) -> anyhow::Result<()> {
         let multi_state = MultiAppState {
@@ -459,14 +504,6 @@ impl MultiConfigTransport {
             .route("/health", get(handle_multi_health))
             .route("/stats", get(handle_all_stats))
 
-            // Web UI routes directly handled here but using templates
-            .route("/ui", get(|| async { axum::response::Redirect::permanent("/ui/") }))
-            .route("/ui/", get(handle_web_home))
-            .route("/ui/upload", post(handle_web_upload))
-            .route("/ui/apis", get(handle_web_apis))
-            
-            // Root redirect to UI
-            .route("/", get(|| async { axum::response::Redirect::permanent("/ui/") }))
             
             .layer(
                 ServiceBuilder::new()
@@ -488,14 +525,14 @@ impl MultiConfigTransport {
 }
 /// Multi-app state for managing multiple configurations  
 #[derive(Clone)]
-struct MultiAppState {
+pub struct MultiAppState {
     multi_server: Arc<MultiConfigServer>,
     sse_state: Arc<SseState>,
     web_state: WebState,
 }
 
 /// Handle single-API messages (backwards compatibility)
-async fn handle_single_message(
+pub async fn handle_single_message(
     State(app_state): State<MultiAppState>,
     Query(params): Query<HashMap<String, String>>,
     Json(request): Json<McpRequest>,
@@ -510,7 +547,7 @@ async fn handle_single_message(
 }
 
 /// Handle multi-API messages
-async fn handle_multi_message(
+pub async fn handle_multi_message(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
     Query(params): Query<HashMap<String, String>>,
@@ -570,7 +607,7 @@ async fn handle_api_message(
 }
 
 /// Handle single-API SSE (backwards compatibility)
-async fn handle_single_sse(
+pub async fn handle_single_sse(
     State(app_state): State<MultiAppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<(axum::http::HeaderMap, Sse<impl Stream<Item = Result<Event, Infallible>>>), StatusCode> {
@@ -584,7 +621,7 @@ async fn handle_single_sse(
 }
 
 /// Handle multi-API SSE connections
-async fn handle_multi_sse(
+pub async fn handle_multi_sse(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
     Query(params): Query<HashMap<String, String>>,
@@ -661,7 +698,7 @@ async fn handle_multi_sse(
 use futures::Stream;
 
 /// Handle API upload
-async fn handle_upload_openapi(
+pub async fn handle_upload_openapi(
     State(app_state): State<MultiAppState>,
     Json(request): Json<UploadRequest>,
 ) -> Result<Json<Value>, StatusCode> {
@@ -720,7 +757,7 @@ async fn handle_upload_openapi(
 }
 
 /// List all configured APIs
-async fn handle_list_apis(
+pub async fn handle_list_apis(
     State(app_state): State<MultiAppState>,
 ) -> Json<Value> {
     let apis = app_state.multi_server.list_apis().await;
@@ -799,7 +836,7 @@ async fn handle_delete_api(
 }
 
 /// Multi-config health check
-async fn handle_multi_health(
+pub async fn handle_multi_health(
     State(app_state): State<MultiAppState>,
 ) -> Json<Value> {
     let apis = app_state.multi_server.list_apis().await;
@@ -816,7 +853,7 @@ async fn handle_multi_health(
 }
 
 /// Get all API statistics
-async fn handle_all_stats(
+pub async fn handle_all_stats(
     State(app_state): State<MultiAppState>,
 ) -> Json<Value> {
     let stats = app_state.multi_server.get_all_stats().await;
@@ -825,7 +862,7 @@ async fn handle_all_stats(
 
 /// Request payload for OpenAPI upload
 #[derive(Debug, Deserialize)]
-struct UploadRequest {
+pub struct UploadRequest {
     api_name: String,
     base_url: String,
     openapi_content: String,
@@ -838,32 +875,23 @@ struct UpdateConfigRequest {
     openapi_content: Option<String>,
 }
 
-/// Web UI handlers using templates from aether-web but with MultiAppState
-
-/// Web home page using Askama template  
-async fn handle_web_home() -> impl axum::response::IntoResponse {
-    aether_web::render_home()
+/// Handle OAuth2 callback redirects by forwarding to the proper web auth callback
+async fn oauth2_callback_redirect(
+    Query(params): Query<HashMap<String, String>>,
+) -> axum::response::Redirect {
+    // Build the redirect URL with all query parameters preserved
+    let mut redirect_url = "/web/auth/callback".to_string();
+    
+    if !params.is_empty() {
+        let query_string = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))  // Simple format for now, query params should be safe
+            .collect::<Vec<_>>()
+            .join("&");
+        redirect_url.push('?');
+        redirect_url.push_str(&query_string);
+    }
+    
+    axum::response::Redirect::to(&redirect_url)
 }
-
-/// Web upload handler that integrates with multi-server
-async fn handle_web_upload(
-    State(app_state): State<MultiAppState>,
-    multipart: axum::extract::Multipart,
-) -> impl axum::response::IntoResponse {
-    aether_web::handle_upload_with_multi_server(
-        multipart, 
-        &app_state.web_state,
-        |api_name, config, openapi_content| async move {
-            app_state.multi_server.add_api_config(&api_name, config, &openapi_content)
-                .await
-                .map_err(|e| e.to_string())
-        }
-    ).await
-}
-
-/// Web API list handler using templates
-async fn handle_web_apis(State(app_state): State<MultiAppState>) -> impl axum::response::IntoResponse {
-    aether_web::render_apis(&app_state.web_state).await
-}
-
 

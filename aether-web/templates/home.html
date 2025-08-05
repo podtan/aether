@@ -4,6 +4,33 @@
 
 {% block content %}
 <div class="space-y-6">
+    <!-- User info -->
+    {% if let Some(u) = user %}
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg leading-6 font-medium text-gray-900">
+                        Welcome, {{ u.name }}
+                    </h3>
+                    <p class="mt-1 text-sm text-gray-600">
+                        {{ u.email }} ({{ u.role }})
+                    </p>
+                </div>
+                <form action="/web/auth/logout" method="post">
+                    <button type="submit" 
+                            class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+                        <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                        </svg>
+                        Logout
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Page title -->
     <div>
         <h2 class="text-2xl font-bold text-gray-900">Multi-Config Manager</h2>
@@ -18,7 +45,7 @@
             <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
                 Upload OpenAPI Specification
             </h3>
-            <form action="/ui/upload" method="post" enctype="multipart/form-data" class="space-y-4">
+            <form action="/web/upload" method="post" enctype="multipart/form-data" class="space-y-4">
                 <div>
                     <label for="api_name" class="block text-sm font-medium text-gray-700">API Name</label>
                     <input type="text" 
@@ -62,7 +89,7 @@
                 Quick Actions
             </h3>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <a href="/ui/apis" 
+                <a href="/web/apis" 
                    class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
                     <div class="flex-shrink-0">
                         <div class="h-10 w-10 rounded-lg bg-primary flex items-center justify-center">
@@ -78,7 +105,7 @@
                     </div>
                 </a>
 
-                <a href="/api/list" 
+                <a href="/web/health" 
                    class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
                     <div class="flex-shrink-0">
                         <div class="h-10 w-10 rounded-lg bg-green-500 flex items-center justify-center">
@@ -89,30 +116,10 @@
                     </div>
                     <div class="flex-1 min-w-0">
                         <span class="absolute inset-0" aria-hidden="true"></span>
-                        <p class="text-sm font-medium text-gray-900">API List (JSON)</p>
-                        <p class="text-sm text-gray-500">Raw API list endpoint</p>
+                        <p class="text-sm font-medium text-gray-900">Health Check</p>
+                        <p class="text-sm text-gray-500">Server status</p>
                     </div>
                 </a>
-            </div>
-        </div>
-    </div>
-
-    <!-- System status card -->
-    <div class="bg-white shadow rounded-lg">
-        <div class="px-4 py-5 sm:p-6">
-            <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
-                System Status
-            </h3>
-            <div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
-                <div class="text-center">
-                    <a href="/health" class="text-primary hover:text-blue-700 text-sm font-medium">Health Check</a>
-                </div>
-                <div class="text-center">
-                    <a href="/stats" class="text-primary hover:text-blue-700 text-sm font-medium">Statistics</a>
-                </div>
-                <div class="text-center">
-                    <span class="text-green-600 text-sm font-medium">Server Online</span>
-                </div>
             </div>
         </div>
     </div>

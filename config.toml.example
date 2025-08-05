@@ -1,0 +1,33 @@
+# Example configuration for Aether Web with OIDC Authentication
+
+[server]
+host = "127.0.0.1"
+port = 8080
+log_level = "info"
+
+[oidc]
+provider = "kanidm"
+issuer_url = "https://kanidm.example.com"
+client_id = "your_client_id_here"
+client_secret = "your_client_secret_here"
+redirect_url = "http://localhost:8080/auth/callback"
+code_challenge_method = "S256"
+scope = "openid email profile"
+
+[session]
+secret_key = "change_me_for_production_use_a_long_random_string"
+cookie_name = "aether_web_session"
+max_age = 28800 # 8 hours in seconds
+
+[dev]
+local_dev_mode = false
+local_dev_email = "developer@example.com"
+local_dev_role = "user"
+local_dev_name = "Local Developer"
+
+# API configurations remain the same
+[apis]
+# Example API configuration
+# [apis.example]
+# base_url = "https://api.example.com"
+# openapi_spec = "path/to/openapi.yaml"
