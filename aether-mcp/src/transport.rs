@@ -462,7 +462,6 @@ impl MultiConfigTransport {
 
         let app = Router::new()
             .nest("/web", web_router)  // Web auth routes under /web
-            .route("/web", get(|| async { axum::response::Redirect::permanent("/web/") }))  // Redirect /web to /web/
             .merge(mcp_router)  // Multi-config MCP routes at root level
             .layer(
                 ServiceBuilder::new()

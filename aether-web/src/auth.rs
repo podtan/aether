@@ -48,8 +48,15 @@ pub struct AuthState {
 
 impl AuthState {
     pub async fn new(oidc_config: Option<&OidcConfig>, dev_config: Option<DevConfig>) -> Result<Self> {
+        // Only create OIDC client if not in dev mode
+        let in_dev_mode = dev_config.as_ref().map(|c| c.local_dev_mode).unwrap_or(false);
+        
         let oidc_client = if let Some(config) = oidc_config {
-            Some(Self::create_oidc_client(config).await?)
+            if !in_dev_mode {
+                Some(Self::create_oidc_client(config).await?)
+            } else {
+                None // Skip OIDC client creation in dev mode
+            }
         } else {
             None
         };
