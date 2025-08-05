@@ -27,5 +27,5 @@ openid = "0.10"
 url = "2.5"
 uuid = { version = "1.0", features = ["v4"] }
 base64 = "0.22"
-tower-sessions = "0.12"
+tower-sessions = "0.14"
 toml = "0.8"

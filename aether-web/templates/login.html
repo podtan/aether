@@ -39,7 +39,7 @@
         </div>
         {% endif %}
 
-        {% if error %}
+        {% if error.is_some() %}
         <div class="bg-red-50 border border-red-200 rounded-md p-4">
             <div class="flex">
                 <div class="flex-shrink-0">
@@ -70,6 +70,10 @@
                                     Authentication callback failed.
                                 {% else if err == "no_state" %}
                                     Missing OAuth state. Please try again.
+                                {% else if err == "token_decode_failed" %}
+                                    Failed to decode authentication token.
+                                {% else if err == "no_id_token" %}
+                                    No authentication token received.
                                 {% else %}
                                     An error occurred during login: {{ err }}
                                 {% endif %}

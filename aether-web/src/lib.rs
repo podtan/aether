@@ -179,17 +179,17 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
 }
 
 /// Redirect to login page
-async fn login_redirect() -> impl IntoResponse {
+async fn login_redirect() -> Redirect {
     Redirect::to("/web/auth/login")
 }
 
 /// Health check endpoint
-async fn health_check() -> impl IntoResponse {
+async fn health_check() -> &'static str {
     "OK"
 }
 
 /// Main dashboard page  
-async fn home_page(session: Session) -> impl IntoResponse {
+async fn home_page(session: Session) -> HomeTemplate {
     let user = auth::get_current_user(session).await;
     HomeTemplate { user }
 }
