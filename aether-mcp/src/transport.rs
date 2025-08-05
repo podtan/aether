@@ -446,10 +446,20 @@ impl MultiConfigTransport {
                 let callback = |api_name: String, config: aether_config::AetherConfig, openapi_content: String| {
                     let multi_server = multi_server.clone();
                     async move {
-                        multi_server
+                        info!("🚀 Transport callback called for API: {}", api_name);
+                        match multi_server
                             .add_api_config(&api_name, config, &openapi_content)
                             .await
-                            .map_err(|e| e.to_string())
+                        {
+                            Ok(()) => {
+                                info!("✅ MultiConfigServer.add_api_config succeeded for API: {}", api_name);
+                                Ok(())
+                            }
+                            Err(e) => {
+                                error!("❌ MultiConfigServer.add_api_config failed for API {}: {}", api_name, e);
+                                Err(e.to_string())
+                            }
+                        }
                     }
                 };
 

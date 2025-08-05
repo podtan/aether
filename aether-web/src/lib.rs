@@ -464,15 +464,17 @@ where
     ).await {
         Ok(config) => {
             // Add to multi-server using the provided callback
+            info!("🔄 Calling multi-server callback for API: {}", api_name);
             match add_config_fn(api_name.clone(), config.clone(), openapi_content.clone()).await {
                 Ok(()) => {
+                    info!("✅ Multi-server callback succeeded for API: {}", api_name);
                     // Also update web state for UI
                     match serde_yaml::to_string(&config) {
                         Ok(config_yaml) => {
                             let config_info = ConfigInfo {
                                 api_name: api_name.clone(),
                                 openapi_content,
-                                config_content: config_yaml,
+                                config_content: config_yaml,  
                                 base_url,
                                 created_at: chrono::Utc::now(),
                                 updated_at: chrono::Utc::now(),
@@ -498,7 +500,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!("Failed to add API to multi-server: {}", e);
+                    error!("❌ Multi-server callback failed for API {}: {}", api_name, e);
                     UploadResultTemplate {
                         success: false,
                         message: format!("Failed to configure API: {}", e),
