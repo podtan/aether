@@ -167,7 +167,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Single-config mode (existing behavior)
         // Load configuration
         let config_path = PathBuf::from(matches.get_one::<String>("config").unwrap());
-        let config = match AetherConfig::load_from_file(&config_path).await {
+        let config = match config_path.extension().and_then(|ext| ext.to_str()) {
+            Some("toml") => AetherConfig::load_toml_from_file(&config_path).await,
+            _ => AetherConfig::load_from_file(&config_path).await,
+        };
+        let config = match config {
             Ok(config) => config,
             Err(e) => {
                 error!("Failed to load configuration: {}", e);
