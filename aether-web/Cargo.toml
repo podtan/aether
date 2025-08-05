@@ -27,5 +27,8 @@ openid = "0.10"
 url = "2.5"
 uuid = { version = "1.0", features = ["v4"] }
 base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json"] }
 tower-sessions = "0.14"
 toml = "0.8"

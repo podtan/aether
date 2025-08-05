@@ -8,8 +8,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use openid::{DiscoveredClient, StandardClaims, Userinfo};
+use rand::{distributions::Alphanumeric, Rng};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tower_sessions::Session;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -17,6 +20,36 @@ use uuid::Uuid;
 
 use aether_config::{OidcConfig, DevConfig};
 use crate::AppState;
+
+/// PKCE parameters for OAuth2 authorization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PkceParams {
+    pub code_verifier: String,
+    pub code_challenge: String,
+}
+
+impl PkceParams {
+    /// Generate new PKCE parameters
+    pub fn new() -> Self {
+        // Generate a cryptographically random code verifier (43-128 characters)
+        let code_verifier: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(128)
+            .map(char::from)
+            .collect();
+        
+        // Create code challenge using SHA256
+        let mut hasher = Sha256::new();
+        hasher.update(code_verifier.as_bytes());
+        let hash = hasher.finalize();
+        let code_challenge = URL_SAFE_NO_PAD.encode(&hash);
+        
+        Self {
+            code_verifier,
+            code_challenge,
+        }
+    }
+}
 
 /// User information stored in session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,21 +189,35 @@ async fn oidc_login(
         // Generate a random state for CSRF protection
         let state = Uuid::new_v4().to_string();
         
-        // Store the state in the session
+        // Generate PKCE parameters
+        let pkce_params = PkceParams::new();
+        
+        // Store the state and PKCE verifier in the session
         if let Err(e) = session.insert("oauth_state", &state).await {
             warn!("Failed to store OAuth state in session: {}", e);
             return Redirect::to("/web/login?error=session_error");
         }
         
-        // Build the authorization URL
+        if let Err(e) = session.insert("pkce_verifier", &pkce_params.code_verifier).await {
+            warn!("Failed to store PKCE verifier in session: {}", e);
+            return Redirect::to("/web/login?error=session_error");
+        }
+        
+        // Manually build the authorization URL with PKCE parameters
         let auth_url = oidc_client.auth_url(&openid::Options {
             scope: Some("openid email profile".to_string()),
             state: Some(state),
             ..Default::default()
         });
         
-        debug!("Redirecting to OIDC authorization URL: {}", auth_url);
-        Redirect::to(&auth_url.to_string())
+        // Add PKCE parameters to the URL
+        let mut url_with_pkce = auth_url.clone();
+        url_with_pkce.query_pairs_mut()
+            .append_pair("code_challenge", &pkce_params.code_challenge)
+            .append_pair("code_challenge_method", "S256");
+        
+        debug!("Redirecting to OIDC authorization URL with PKCE: {}", url_with_pkce);
+        Redirect::to(&url_with_pkce.to_string())
     } else {
         // OIDC client not available, redirect with error
         Redirect::to("/web/login?error=oidc_not_configured")
@@ -187,32 +234,40 @@ async fn oidc_callback(
         // Verify the state parameter
         match session.get::<String>("oauth_state").await {
             Ok(Some(stored_state)) if stored_state == callback.state => {
-                // State is valid, proceed with token exchange
-                debug!("OAuth state verified, exchanging code for token");
-                
-                match oidc_client.request_token(&callback.code).await {
-                    Ok(_token) => {
-                        // For now, create a basic user info from what we have
-                        // In a real implementation, you'd decode the ID token or call userinfo endpoint
-                        let user_info = UserInfo {
-                            sub: "user".to_string(), // Would come from ID token claims
-                            email: "user@example.com".to_string(), // Would come from ID token claims  
-                            name: "OIDC User".to_string(), // Would come from ID token claims
-                            role: UserRole::User,
-                        };
+                // State is valid, get the PKCE verifier
+                match session.get::<String>("pkce_verifier").await {
+                    Ok(Some(code_verifier)) => {
+                        debug!("OAuth state verified, exchanging code for token with PKCE");
                         
-                        // Store user info in session
-                        if let Err(e) = session.insert("user_info", &user_info).await {
-                            warn!("Failed to store user info in session: {}", e);
-                            return Redirect::to("/web/login?error=session_error");
+                        // Perform token exchange with PKCE
+                        match exchange_token_with_pkce(oidc_client, &callback.code, &code_verifier).await {
+                            Ok(user_info) => {
+                                // Store user info in session
+                                if let Err(e) = session.insert("user_info", &user_info).await {
+                                    warn!("Failed to store user info in session: {}", e);
+                                    return Redirect::to("/web/login?error=session_error");
+                                }
+                                
+                                // Clean up session data
+                                let _ = session.remove::<String>("oauth_state").await;
+                                let _ = session.remove::<String>("pkce_verifier").await;
+                                
+                                info!("User {} logged in successfully", user_info.email);
+                                return Redirect::to("/web/");
+                            }
+                            Err(e) => {
+                                warn!("Failed to exchange code for token: {}", e);
+                                return Redirect::to("/web/login?error=token_exchange_failed");
+                            }
                         }
-                        
-                        info!("User {} logged in successfully", user_info.email);
-                        return Redirect::to("/web/");
+                    }
+                    Ok(None) => {
+                        warn!("No PKCE verifier found in session");
+                        return Redirect::to("/web/login?error=no_pkce_verifier");
                     }
                     Err(e) => {
-                        warn!("Failed to exchange code for token: {}", e);
-                        return Redirect::to("/web/login?error=token_exchange_failed");
+                        warn!("Failed to get PKCE verifier from session: {}", e);
+                        return Redirect::to("/web/login?error=session_error");
                     }
                 }
             }
@@ -233,6 +288,100 @@ async fn oidc_callback(
     
     // Fallback error
     Redirect::to("/web/login?error=callback_failed")
+}
+
+/// Exchange authorization code for tokens using PKCE
+async fn exchange_token_with_pkce(
+    oidc_client: &DiscoveredClient,
+    code: &str,
+    code_verifier: &str,
+) -> Result<UserInfo> {
+    // Build the request manually since we need to add PKCE
+    let token_endpoint = &oidc_client.config().token_endpoint;
+    let client_id = &oidc_client.client_id;
+    let client_secret = &oidc_client.client_secret;
+    let redirect_uri = oidc_client.redirect_url();
+    
+    let form_params = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret.as_str()),
+        ("code_verifier", code_verifier),
+    ];
+    
+    debug!("Making PKCE token request to: {}", token_endpoint);
+    
+    // Use the same HTTP client that openid crate would use
+    let client = reqwest::Client::new();
+    
+    let response = client
+        .post(token_endpoint.as_str())
+        .form(&form_params)
+        .send()
+        .await?;
+    
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        warn!("Token request failed with status {}: {}", status, error_text);
+        return Err(anyhow::anyhow!("Token request failed: {}", error_text));
+    }
+    
+    let token_response: serde_json::Value = response.json().await?;
+    debug!("Token response received successfully");
+    
+    // Extract the access token
+    let access_token = token_response["access_token"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No access token in response"))?;
+    
+    // Get user info from the userinfo endpoint
+    let userinfo_endpoint = &oidc_client.config().userinfo_endpoint;
+    
+    if userinfo_endpoint.is_none() {
+        return Err(anyhow::anyhow!("No userinfo endpoint available"));
+    }
+    
+    let userinfo_endpoint = userinfo_endpoint.as_ref().unwrap();
+    debug!("Getting user info from: {}", userinfo_endpoint);
+    
+    let userinfo_response = client
+        .get(userinfo_endpoint.as_str())
+        .bearer_auth(access_token)
+        .send()
+        .await?;
+    
+    if !userinfo_response.status().is_success() {
+        let status = userinfo_response.status();
+        let error_text = userinfo_response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        warn!("Userinfo request failed with status {}: {}", status, error_text);
+        return Err(anyhow::anyhow!("Userinfo request failed: {}", error_text));
+    }
+    
+    let userinfo: serde_json::Value = userinfo_response.json().await?;
+    debug!("User info received: {:?}", userinfo);
+    
+    // Extract user information
+    let user_info = UserInfo {
+        sub: userinfo["sub"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string(),
+        email: userinfo["email"]
+            .as_str()
+            .unwrap_or("unknown@example.com")
+            .to_string(),
+        name: userinfo["name"]
+            .as_str()
+            .or_else(|| userinfo["preferred_username"].as_str())
+            .unwrap_or("OIDC User")
+            .to_string(),
+        role: UserRole::User, // Default to User role
+    };
+    
+    Ok(user_info)
 }
 
 /// Development mode login
