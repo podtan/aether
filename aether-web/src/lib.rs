@@ -21,7 +21,7 @@ use aether_config::AetherConfig;
 use aether_config::generator;
 
 mod auth;
-pub use auth::{AuthState, UserInfo, UserRole};
+pub use auth::{AuthState, UserInfo, UserRole, get_current_user};
 
 #[cfg(test)]
 mod tests;
@@ -141,7 +141,6 @@ impl IntoResponse for UploadResultTemplate {
 /// Create the web UI router with authentication
 pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
     let app_state = AppState::new(config).await?;
-    
     // Session configuration
     let session_config = config.session.as_ref().ok_or_else(|| {
         anyhow::anyhow!("Session configuration is required")

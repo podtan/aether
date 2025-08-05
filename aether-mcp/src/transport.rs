@@ -458,12 +458,18 @@ impl MultiConfigTransport {
             // Health and stats
             .route("/health", get(handle_multi_health))
             .route("/stats", get(handle_all_stats))
-            .with_state(multi_state);
+            .with_state(multi_state.clone());
+
+        // Create a web override router for the upload route
+        let web_override_router = Router::new()
+            .route("/web/upload", post(handle_web_upload_openapi))
+            .with_state(multi_state.clone());
 
         let app = Router::new()
             .nest("/web", web_router)  // Web auth routes under /web
             .route("/oauth2/callback", axum::routing::get(oauth2_callback_redirect))  // Handle OAuth2 callback redirects
             .merge(mcp_router)  // Multi-config MCP routes at root level
+            .merge(web_override_router)  // Override the web upload route
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -754,6 +760,33 @@ pub async fn handle_upload_openapi(
             })))
         }
     }
+}
+
+/// Handle web-based OpenAPI upload with multipart form data and web authentication
+async fn handle_web_upload_openapi(
+    State(app_state): State<MultiAppState>,
+    session: tower_sessions::Session,
+    multipart: axum::extract::Multipart,
+) -> aether_web::UploadResultTemplate {
+    // Get user from session for web authentication
+    let user = aether_web::get_current_user(session).await;
+    
+    // Use the existing upload handler with multi-server integration
+    let callback = |api_name: String, config: aether_config::AetherConfig, openapi_content: String| async move {
+        app_state
+            .multi_server
+            .add_api_config(&api_name, config, &openapi_content)
+            .await
+            .map_err(|e| e.to_string())
+    };
+
+    aether_web::handle_upload_with_multi_server(
+        multipart,
+        &app_state.web_state,
+        user,
+        callback,
+    )
+    .await
 }
 
 /// List all configured APIs
