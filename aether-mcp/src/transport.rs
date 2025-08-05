@@ -462,6 +462,7 @@ impl MultiConfigTransport {
 
         let app = Router::new()
             .nest("/web", web_router)  // Web auth routes under /web
+            .route("/oauth2/callback", axum::routing::get(oauth2_callback_redirect))  // Handle OAuth2 callback redirects
             .merge(mcp_router)  // Multi-config MCP routes at root level
             .layer(
                 ServiceBuilder::new()
@@ -874,6 +875,23 @@ struct UpdateConfigRequest {
     openapi_content: Option<String>,
 }
 
-
-
+/// Handle OAuth2 callback redirects by forwarding to the proper web auth callback
+async fn oauth2_callback_redirect(
+    Query(params): Query<HashMap<String, String>>,
+) -> axum::response::Redirect {
+    // Build the redirect URL with all query parameters preserved
+    let mut redirect_url = "/web/auth/callback".to_string();
+    
+    if !params.is_empty() {
+        let query_string = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))  // Simple format for now, query params should be safe
+            .collect::<Vec<_>>()
+            .join("&");
+        redirect_url.push('?');
+        redirect_url.push_str(&query_string);
+    }
+    
+    axum::response::Redirect::to(&redirect_url)
+}
 

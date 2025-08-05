@@ -68,6 +68,7 @@ pub async fn start_combined_server(config: AetherConfig, bind_addr: SocketAddr) 
     let app = Router::new()
         .nest("/web", web_router)  // Web auth routes under /web
         .route("/web", axum::routing::get(|| async { axum::response::Redirect::permanent("/web/") }))  // Redirect /web to /web/
+        .route("/oauth2/callback", axum::routing::get(oauth2_callback_redirect))  // Handle OAuth2 callback redirects
         .merge(mcp_router)  // MCP routes at root level
         .layer(
             ServiceBuilder::new()
@@ -102,4 +103,24 @@ pub async fn start_stdio_server(config: AetherConfig) -> anyhow::Result<()> {
     transport.start().await?;
 
     Ok(())
+}
+
+/// Handle OAuth2 callback redirects by forwarding to the proper web auth callback
+async fn oauth2_callback_redirect(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Redirect {
+    // Build the redirect URL with all query parameters preserved
+    let mut redirect_url = "/web/auth/callback".to_string();
+    
+    if !params.is_empty() {
+        let query_string = params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))  // Simple encoding for now, query params should be safe
+            .collect::<Vec<_>>()
+            .join("&");
+        redirect_url.push('?');
+        redirect_url.push_str(&query_string);
+    }
+    
+    axum::response::Redirect::to(&redirect_url)
 }
