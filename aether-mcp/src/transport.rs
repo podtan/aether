@@ -429,12 +429,41 @@ impl MultiConfigTransport {
     }
 
     /// Create an app with web routes added
-    pub async fn create_app_with_web_routes(self, web_router: Router) -> anyhow::Result<Router> {
+    pub async fn create_app_with_web_routes(self, web_config: &aether_config::AetherConfig) -> anyhow::Result<Router> {
         let multi_state = MultiAppState {
-            multi_server: self.multi_server,
+            multi_server: self.multi_server.clone(),
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
         };
+
+        // Create upload callback that uses the multi-config server
+        let multi_server_for_callback = self.multi_server.clone();
+        let web_state_for_callback = self.web_state.clone();
+        let upload_callback = move |multipart: axum::extract::Multipart, user: Option<aether_web::UserInfo>| {
+            let multi_server = multi_server_for_callback.clone();
+            let web_state = web_state_for_callback.clone();
+            async move {
+                let callback = |api_name: String, config: aether_config::AetherConfig, openapi_content: String| {
+                    let multi_server = multi_server.clone();
+                    async move {
+                        multi_server
+                            .add_api_config(&api_name, config, &openapi_content)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                };
+
+                aether_web::handle_upload_with_multi_server(
+                    multipart,
+                    &web_state,
+                    user,
+                    callback,
+                ).await
+            }
+        };
+
+        // Create web router with multi-config upload integration
+        let web_router = aether_web::create_router_with_upload_callback(web_config, upload_callback).await?;
 
         let mcp_router = Router::new()
             // Legacy single-API endpoints (for backwards compatibility)
@@ -460,16 +489,10 @@ impl MultiConfigTransport {
             .route("/stats", get(handle_all_stats))
             .with_state(multi_state.clone());
 
-        // Create a web override router for the upload route
-        let web_override_router = Router::new()
-            .route("/web/upload", post(handle_web_upload_openapi))
-            .with_state(multi_state.clone());
-
         let app = Router::new()
             .nest("/web", web_router)  // Web auth routes under /web
             .route("/oauth2/callback", axum::routing::get(oauth2_callback_redirect))  // Handle OAuth2 callback redirects
             .merge(mcp_router)  // Multi-config MCP routes at root level
-            .merge(web_override_router)  // Override the web upload route
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -760,33 +783,6 @@ pub async fn handle_upload_openapi(
             })))
         }
     }
-}
-
-/// Handle web-based OpenAPI upload with multipart form data and web authentication
-async fn handle_web_upload_openapi(
-    State(app_state): State<MultiAppState>,
-    session: tower_sessions::Session,
-    multipart: axum::extract::Multipart,
-) -> aether_web::UploadResultTemplate {
-    // Get user from session for web authentication
-    let user = aether_web::get_current_user(session).await;
-    
-    // Use the existing upload handler with multi-server integration
-    let callback = |api_name: String, config: aether_config::AetherConfig, openapi_content: String| async move {
-        app_state
-            .multi_server
-            .add_api_config(&api_name, config, &openapi_content)
-            .await
-            .map_err(|e| e.to_string())
-    };
-
-    aether_web::handle_upload_with_multi_server(
-        multipart,
-        &app_state.web_state,
-        user,
-        callback,
-    )
-    .await
 }
 
 /// List all configured APIs

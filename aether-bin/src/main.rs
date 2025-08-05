@@ -269,12 +269,9 @@ async fn start_multi_config_web_server(
     // Create multi-config server for MCP APIs
     let multi_server = MultiConfigServer::new(configs_dir).await?;
 
-    // Create web authentication router
-    let web_router = aether_web::create_router(&web_config).await?;
-
     // Create multi-config transport and combine with web routes
     let transport = MultiConfigTransport::new(multi_server, bind_addr.port());
-    let app = transport.create_app_with_web_routes(web_router).await?;
+    let app = transport.create_app_with_web_routes(&web_config).await?;
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app).await?;
