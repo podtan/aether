@@ -428,6 +428,51 @@ impl MultiConfigTransport {
         }
     }
 
+    /// Create an app with web routes added
+    pub async fn create_app_with_web_routes(self, web_router: Router) -> anyhow::Result<Router> {
+        let multi_state = MultiAppState {
+            multi_server: self.multi_server,
+            sse_state: SseState::new(),
+            web_state: self.web_state.clone(),
+        };
+
+        let mcp_router = Router::new()
+            // Legacy single-API endpoints (for backwards compatibility)
+            .route("/message", post(handle_single_message))
+            .route("/messages", post(handle_single_message))
+            .route("/sse", get(handle_single_sse))
+
+            // Multi-API endpoints  
+            .route("/{api_name}/message", post(handle_multi_message))
+            .route("/{api_name}/messages", post(handle_multi_message))
+            .route("/{api_name}/sse", get(handle_multi_sse))
+
+            // API management endpoints
+            .route("/api/generate-config", post(handle_generate_config))
+            .route("/api/upload-openapi", post(handle_upload_openapi))
+            .route("/api/list", get(handle_list_apis))
+            .route("/api/{api_name}/config", get(handle_get_config))
+            .route("/api/{api_name}/config", post(handle_update_config))
+            .route("/api/{api_name}/delete", post(handle_delete_api))
+
+            // Health and stats
+            .route("/health", get(handle_multi_health))
+            .route("/stats", get(handle_all_stats))
+            .with_state(multi_state);
+
+        let app = Router::new()
+            .nest("/web", web_router)  // Web auth routes under /web
+            .route("/web", get(|| async { axum::response::Redirect::permanent("/web/") }))  // Redirect /web to /web/
+            .merge(mcp_router)  // Multi-config MCP routes at root level
+            .layer(
+                ServiceBuilder::new()
+                    .layer(TraceLayer::new_for_http())
+                    .layer(CorsLayer::permissive()),
+            );
+
+        Ok(app)
+    }
+
     /// Start the HTTP server with multi-config support
     pub async fn start(self) -> anyhow::Result<()> {
         let multi_state = MultiAppState {
@@ -458,7 +503,6 @@ impl MultiConfigTransport {
             // Health and stats
             .route("/health", get(handle_multi_health))
             .route("/stats", get(handle_all_stats))
-
 
             
             .layer(

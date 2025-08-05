@@ -67,6 +67,7 @@ pub async fn start_combined_server(config: AetherConfig, bind_addr: SocketAddr) 
     // Combine both routers
     let app = Router::new()
         .nest("/web", web_router)  // Web auth routes under /web
+        .route("/web", axum::routing::get(|| async { axum::response::Redirect::permanent("/web/") }))  // Redirect /web to /web/
         .merge(mcp_router)  // MCP routes at root level
         .layer(
             ServiceBuilder::new()

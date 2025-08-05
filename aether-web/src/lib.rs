@@ -150,6 +150,7 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
     let router = Router::new()
         // Public routes
         .route("/", get(home_page))
+        .route("/ui", get(home_page))  // Also accessible as /ui
         .route("/login", get(login_redirect))
         .route("/health", get(health_check))
         .route("/upload", post(handle_upload_openapi))
