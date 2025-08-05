@@ -525,14 +525,14 @@ impl MultiConfigTransport {
 }
 /// Multi-app state for managing multiple configurations  
 #[derive(Clone)]
-struct MultiAppState {
+pub struct MultiAppState {
     multi_server: Arc<MultiConfigServer>,
     sse_state: Arc<SseState>,
     web_state: WebState,
 }
 
 /// Handle single-API messages (backwards compatibility)
-async fn handle_single_message(
+pub async fn handle_single_message(
     State(app_state): State<MultiAppState>,
     Query(params): Query<HashMap<String, String>>,
     Json(request): Json<McpRequest>,
@@ -547,7 +547,7 @@ async fn handle_single_message(
 }
 
 /// Handle multi-API messages
-async fn handle_multi_message(
+pub async fn handle_multi_message(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
     Query(params): Query<HashMap<String, String>>,
@@ -607,7 +607,7 @@ async fn handle_api_message(
 }
 
 /// Handle single-API SSE (backwards compatibility)
-async fn handle_single_sse(
+pub async fn handle_single_sse(
     State(app_state): State<MultiAppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<(axum::http::HeaderMap, Sse<impl Stream<Item = Result<Event, Infallible>>>), StatusCode> {
@@ -621,7 +621,7 @@ async fn handle_single_sse(
 }
 
 /// Handle multi-API SSE connections
-async fn handle_multi_sse(
+pub async fn handle_multi_sse(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
     Query(params): Query<HashMap<String, String>>,
@@ -698,7 +698,7 @@ async fn handle_multi_sse(
 use futures::Stream;
 
 /// Handle API upload
-async fn handle_upload_openapi(
+pub async fn handle_upload_openapi(
     State(app_state): State<MultiAppState>,
     Json(request): Json<UploadRequest>,
 ) -> Result<Json<Value>, StatusCode> {
@@ -757,7 +757,7 @@ async fn handle_upload_openapi(
 }
 
 /// List all configured APIs
-async fn handle_list_apis(
+pub async fn handle_list_apis(
     State(app_state): State<MultiAppState>,
 ) -> Json<Value> {
     let apis = app_state.multi_server.list_apis().await;
@@ -836,7 +836,7 @@ async fn handle_delete_api(
 }
 
 /// Multi-config health check
-async fn handle_multi_health(
+pub async fn handle_multi_health(
     State(app_state): State<MultiAppState>,
 ) -> Json<Value> {
     let apis = app_state.multi_server.list_apis().await;
@@ -853,7 +853,7 @@ async fn handle_multi_health(
 }
 
 /// Get all API statistics
-async fn handle_all_stats(
+pub async fn handle_all_stats(
     State(app_state): State<MultiAppState>,
 ) -> Json<Value> {
     let stats = app_state.multi_server.get_all_stats().await;
@@ -862,7 +862,7 @@ async fn handle_all_stats(
 
 /// Request payload for OpenAPI upload
 #[derive(Debug, Deserialize)]
-struct UploadRequest {
+pub struct UploadRequest {
     api_name: String,
     base_url: String,
     openapi_content: String,

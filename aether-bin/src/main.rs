@@ -264,80 +264,21 @@ async fn start_multi_config_web_server(
     web_config: AetherConfig,
     bind_addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use aether_mcp::transport::SseState;
-    use axum::{routing::get, Router};
-    use tower::ServiceBuilder;
-    use tower_http::{cors::CorsLayer, trace::TraceLayer};
-    use std::sync::Arc;
-    
     info!("Starting combined multi-config MCP + Web Auth server on {}", bind_addr);
 
     // Create multi-config server for MCP APIs
-    let multi_server = Arc::new(MultiConfigServer::new(configs_dir).await?);
+    let multi_server = MultiConfigServer::new(configs_dir).await?;
 
     // Create web authentication router
     let web_router = aether_web::create_router(&web_config).await?;
 
-    // Create MCP transport state for multi-config (using the existing private struct)
-    let sse_state = SseState::new();
-    
-    // Create multi-config MCP routes using existing handlers
-    let mcp_router = Router::new()
-        // Legacy single-API endpoints (for backwards compatibility)
-        .route("/message", axum::routing::post(|state, query, json| async move {
-            aether_mcp::transport::handle_single_message(axum::extract::State(state), axum::extract::Query(query), axum::extract::Json(json)).await
-        }))
-        .route("/messages", axum::routing::post(|state, query, json| async move {
-            aether_mcp::transport::handle_single_message(axum::extract::State(state), axum::extract::Query(query), axum::extract::Json(json)).await
-        }))
-        .route("/sse", get(|state, query| async move {
-            aether_mcp::transport::handle_single_sse(axum::extract::State(state), axum::extract::Query(query)).await
-        }))
-
-        // Multi-API endpoints  
-        .route("/apis/:api_name/message", axum::routing::post(|state, path, query, json| async move {
-            aether_mcp::transport::handle_multi_message(axum::extract::State(state), axum::extract::Path(path), axum::extract::Query(query), axum::extract::Json(json)).await
-        }))
-        .route("/apis/:api_name/messages", axum::routing::post(|state, path, query, json| async move {
-            aether_mcp::transport::handle_multi_message(axum::extract::State(state), axum::extract::Path(path), axum::extract::Query(query), axum::extract::Json(json)).await
-        }))
-        .route("/apis/:api_name/sse", get(|state, path, query| async move {
-            aether_mcp::transport::handle_multi_sse(axum::extract::State(state), axum::extract::Path(path), axum::extract::Query(query)).await
-        }))
-
-        // API management endpoints
-        .route("/api/generate-config", axum::routing::post(|state, json| async move {
-            aether_mcp::transport::handle_generate_config(axum::extract::State(state), axum::extract::Json(json)).await
-        }))
-        .route("/api/upload-openapi", axum::routing::post(|state, multipart| async move {
-            aether_mcp::transport::handle_upload_openapi(axum::extract::State(state), multipart).await
-        }))
-        .route("/api/list", get(|state| async move {
-            aether_mcp::transport::handle_list_apis(axum::extract::State(state)).await
-        }))
-
-        // Health and stats
-        .route("/health", get(|state| async move {
-            aether_mcp::transport::handle_multi_health(axum::extract::State(state)).await
-        }))
-        .route("/stats", get(|state| async move {
-            aether_mcp::transport::handle_all_stats(axum::extract::State(state)).await
-        }))
-        .with_state((multi_server, sse_state, aether_web::WebState::new()));
-
-    // Combine both routers
-    let app = Router::new()
-        .nest("/web", web_router)  // Web auth routes under /web
-        .route("/web", axum::routing::get(|| async { axum::response::Redirect::permanent("/web/") }))  // Redirect /web to /web/
-        .merge(mcp_router)  // Multi-config MCP routes at root level
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(CorsLayer::permissive()),
-        );
+    // Create multi-config transport and combine with web routes
+    let transport = MultiConfigTransport::new(multi_server, bind_addr.port());
+    let app = transport.create_app_with_web_routes(web_router).await?;
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
 }
+
