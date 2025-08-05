@@ -2,15 +2,19 @@
 
 use anyhow::Result;
 use axum::{
-    extract::State,
-    response::{IntoResponse, Redirect},
+    extract::{Query, State},
+    http::{StatusCode, Request},
+    middleware::Next,
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
 use openid::{DiscoveredClient, StandardClaims, Userinfo};
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tower_sessions::Session;
+use tracing::{debug, info, warn};
 use url::Url;
+use uuid::Uuid;
 
 use aether_config::{OidcConfig, DevConfig};
 use crate::AppState;
@@ -29,6 +33,15 @@ pub struct UserInfo {
 pub enum UserRole {
     User,
     Admin,
+}
+
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserRole::User => write!(f, "User"),
+            UserRole::Admin => write!(f, "Admin"),
+        }
+    }
 }
 
 impl UserRole {
@@ -92,6 +105,27 @@ pub struct AuthCallback {
     state: String,
 }
 
+/// Authentication middleware to protect routes
+pub async fn auth_middleware<B>(
+    session: Session,
+    request: Request<B>,
+    next: Next<B>,
+) -> Response {
+    // Check if user is authenticated
+    if let Ok(Some(_user_info)) = session.get::<UserInfo>("user_info").await {
+        // User is authenticated, continue
+        next.run(request).await
+    } else {
+        // User is not authenticated, redirect to login
+        Redirect::to("/web/login").into_response()
+    }
+}
+
+/// Get current user from session
+pub async fn get_current_user(session: Session) -> Option<UserInfo> {
+    session.get::<UserInfo>("user_info").await.unwrap_or(None)
+}
+
 /// Create authentication router
 pub fn create_auth_router() -> Router<AppState> {
     Router::new()
@@ -105,37 +139,158 @@ pub fn create_auth_router() -> Router<AppState> {
 /// Display login page
 async fn login_page(
     State(app_state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     let template = crate::LoginTemplate {
         is_dev_mode: app_state.auth.is_dev_mode(),
+        error: params.get("error").cloned(),
     };
     template
 }
 
 /// Initiate OIDC login flow
 async fn oidc_login(
-    State(_app_state): State<AppState>,
+    State(app_state): State<AppState>,
+    session: Session,
 ) -> impl IntoResponse {
-    // For now, just redirect to a placeholder
-    Redirect::to("/web/login?error=not_implemented")
+    if let Some(oidc_client) = &app_state.auth.oidc_client {
+        // Generate a random state for CSRF protection
+        let state = Uuid::new_v4().to_string();
+        
+        // Store the state in the session
+        if let Err(e) = session.insert("oauth_state", &state).await {
+            warn!("Failed to store OAuth state in session: {}", e);
+            return Redirect::to("/web/login?error=session_error");
+        }
+        
+        // Build the authorization URL
+        let auth_url = oidc_client.auth_url(&openid::Options {
+            scope: Some("openid email profile".to_string()),
+            state: Some(state),
+            ..Default::default()
+        });
+        
+        debug!("Redirecting to OIDC authorization URL: {}", auth_url);
+        Redirect::to(&auth_url.to_string())
+    } else {
+        // OIDC client not available, redirect with error
+        Redirect::to("/web/login?error=oidc_not_configured")
+    }
 }
 
 /// Handle OIDC callback
-async fn oidc_callback() -> impl IntoResponse {
-    // For now, just redirect to home
-    Redirect::to("/web/")
+async fn oidc_callback(
+    State(app_state): State<AppState>,
+    session: Session,
+    Query(callback): Query<AuthCallback>,
+) -> impl IntoResponse {
+    if let Some(oidc_client) = &app_state.auth.oidc_client {
+        // Verify the state parameter
+        match session.get::<String>("oauth_state").await {
+            Ok(Some(stored_state)) if stored_state == callback.state => {
+                // State is valid, proceed with token exchange
+                debug!("OAuth state verified, exchanging code for token");
+                
+                match oidc_client.request_token(&callback.code).await {
+                    Ok(mut token) => {
+                        // Get user info
+                        match oidc_client.request_userinfo(&token).await {
+                            Ok(userinfo) => {
+                                // Extract user claims
+                                if let Some(claims) = token.userinfo.as_ref() {
+                                    let user_info = UserInfo {
+                                        sub: claims.sub.clone(),
+                                        email: claims.email.clone().unwrap_or_default(),
+                                        name: claims.name.clone().unwrap_or_default(),
+                                        role: UserRole::from_claims(claims, Some(&userinfo)),
+                                    };
+                                    
+                                    // Store user info in session
+                                    if let Err(e) = session.insert("user_info", &user_info).await {
+                                        warn!("Failed to store user info in session: {}", e);
+                                        return Redirect::to("/web/login?error=session_error");
+                                    }
+                                    
+                                    info!("User {} logged in successfully", user_info.email);
+                                    return Redirect::to("/web/");
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to get user info: {}", e);
+                                return Redirect::to("/web/login?error=userinfo_failed");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to exchange code for token: {}", e);
+                        return Redirect::to("/web/login?error=token_exchange_failed");
+                    }
+                }
+            }
+            Ok(Some(_)) => {
+                warn!("OAuth state mismatch");
+                return Redirect::to("/web/login?error=state_mismatch");
+            }
+            Ok(None) => {
+                warn!("No OAuth state found in session");
+                return Redirect::to("/web/login?error=no_state");
+            }
+            Err(e) => {
+                warn!("Failed to get OAuth state from session: {}", e);
+                return Redirect::to("/web/login?error=session_error");
+            }
+        }
+    }
+    
+    // Fallback error
+    Redirect::to("/web/login?error=callback_failed")
 }
 
 /// Development mode login
 async fn dev_login(
-    State(_app_state): State<AppState>,
+    State(app_state): State<AppState>,
+    session: Session,
 ) -> impl IntoResponse {
-    // For now, just redirect to home
-    Redirect::to("/web/")
+    if let Some(dev_config) = &app_state.auth.dev_config {
+        if dev_config.local_dev_mode {
+            // Create a dev user
+            let user_info = UserInfo {
+                sub: "dev_user".to_string(),
+                email: dev_config.local_dev_email.clone(),
+                name: dev_config.local_dev_name.clone(),
+                role: if dev_config.local_dev_role == "admin" { 
+                    UserRole::Admin 
+                } else { 
+                    UserRole::User 
+                },
+            };
+            
+            // Store user info in session
+            if let Err(e) = session.insert("user_info", &user_info).await {
+                warn!("Failed to store dev user info in session: {}", e);
+                return Redirect::to("/web/login?error=session_error");
+            }
+            
+            info!("Dev user {} logged in successfully", user_info.email);
+            return Redirect::to("/web/");
+        }
+    }
+    
+    Redirect::to("/web/login?error=dev_mode_disabled")
 }
 
 /// Handle logout
-async fn logout() -> impl IntoResponse {
+async fn logout(session: Session) -> impl IntoResponse {
+    // Remove user from session
+    if let Err(e) = session.remove::<UserInfo>("user_info").await {
+        warn!("Failed to remove user from session during logout: {}", e);
+    }
+    
+    // Also remove any OAuth state
+    if let Err(e) = session.remove::<String>("oauth_state").await {
+        warn!("Failed to remove OAuth state during logout: {}", e);
+    }
+    
     info!("User logged out");
     Redirect::to("/web/login")
 }

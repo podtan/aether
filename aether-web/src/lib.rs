@@ -4,6 +4,7 @@ use askama::Template;
 use axum::{
     extract::{Multipart, State},
     http::StatusCode,
+    middleware,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -72,7 +73,9 @@ impl WebState {
 /// Home page template
 #[derive(Template)]
 #[template(path = "home.html")]
-pub struct HomeTemplate;
+pub struct HomeTemplate {
+    pub user: Option<UserInfo>,
+}
 
 impl IntoResponse for HomeTemplate {
     fn into_response(self) -> Response {
@@ -87,7 +90,8 @@ impl IntoResponse for HomeTemplate {
 #[derive(Template)]
 #[template(path = "login.html")]
 pub struct LoginTemplate {
-    is_dev_mode: bool,
+    pub is_dev_mode: bool,
+    pub error: Option<String>,
 }
 
 impl IntoResponse for LoginTemplate {
@@ -103,7 +107,8 @@ impl IntoResponse for LoginTemplate {
 #[derive(Template)]
 #[template(path = "apis.html")]
 pub struct ApiListTemplate {
-    configs: Vec<ConfigInfo>,
+    pub configs: Vec<ConfigInfo>,
+    pub user: Option<UserInfo>,
 }
 
 impl IntoResponse for ApiListTemplate {
@@ -119,8 +124,9 @@ impl IntoResponse for ApiListTemplate {
 #[derive(Template)]
 #[template(path = "upload_result.html")]
 pub struct UploadResultTemplate {
-    success: bool,
-    message: String,
+    pub success: bool,
+    pub message: String,
+    pub user: Option<UserInfo>,
 }
 
 impl IntoResponse for UploadResultTemplate {
@@ -147,17 +153,24 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
         .with_http_only(true)
         .with_name(session_config.cookie_name.clone());
 
-    let router = Router::new()
-        // Public routes
+    // Protected routes (require authentication)
+    let protected_routes = Router::new()
         .route("/", get(home_page))
         .route("/ui", get(home_page))  // Also accessible as /ui
-        .route("/login", get(login_redirect))
-        .route("/health", get(health_check))
         .route("/upload", post(handle_upload_openapi))
         .route("/apis", get(handle_list_apis))
+        .layer(middleware::from_fn(auth::auth_middleware));
+
+    let router = Router::new()
+        // Public routes (no authentication required)
+        .route("/login", get(login_redirect))
+        .route("/health", get(health_check))
         
-        // Auth routes
+        // Auth routes (always public)
         .nest("/auth", auth::create_auth_router())
+        
+        // Protected routes
+        .merge(protected_routes)
         
         .with_state(app_state)
         .layer(session_layer);
@@ -176,15 +189,18 @@ async fn health_check() -> impl IntoResponse {
 }
 
 /// Main dashboard page  
-async fn home_page() -> impl IntoResponse {
-    HomeTemplate
+async fn home_page(session: Session) -> impl IntoResponse {
+    let user = auth::get_current_user(session).await;
+    HomeTemplate { user }
 }
 
 /// Handle OpenAPI file upload
 async fn handle_upload_openapi(
     State(app_state): State<AppState>,
+    session: Session,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    let user = auth::get_current_user(session).await;
     let mut api_name = String::new();
     let mut base_url = String::new();
     let mut openapi_content = String::new();
@@ -200,6 +216,7 @@ async fn handle_upload_openapi(
                     Err(_) => return UploadResultTemplate {
                         success: false,
                         message: "Failed to read API name".to_string(),
+                        user,
                     },
                 }
             }
@@ -209,6 +226,7 @@ async fn handle_upload_openapi(
                     Err(_) => return UploadResultTemplate {
                         success: false,
                         message: "Failed to read base URL".to_string(),
+                        user,
                     },
                 }
             }
@@ -218,6 +236,7 @@ async fn handle_upload_openapi(
                     Err(_) => return UploadResultTemplate {
                         success: false,
                         message: "Failed to read OpenAPI file".to_string(),
+                        user,
                     },
                 }
             }
@@ -229,6 +248,7 @@ async fn handle_upload_openapi(
         return UploadResultTemplate {
             success: false,
             message: "Missing required fields".to_string(),
+            user,
         };
     }
 
@@ -256,6 +276,7 @@ async fn handle_upload_openapi(
                     UploadResultTemplate {
                         success: true,
                         message: format!("Successfully generated config for API: {}", api_name),
+                        user,
                     }
                 }
                 Err(e) => {
@@ -263,6 +284,7 @@ async fn handle_upload_openapi(
                     UploadResultTemplate {
                         success: false,
                         message: "Failed to serialize configuration".to_string(),
+                        user,
                     }
                 }
             }
@@ -272,6 +294,7 @@ async fn handle_upload_openapi(
             UploadResultTemplate {
                 success: false,
                 message: format!("Failed to generate config: {}", e),
+                user,
             }
         }
     }
@@ -280,29 +303,35 @@ async fn handle_upload_openapi(
 /// List all configured APIs
 async fn handle_list_apis(
     State(app_state): State<AppState>,
+    session: Session,
 ) -> impl IntoResponse {
+    let user = auth::get_current_user(session).await;
     let configs = app_state.web.configs.read().await;
     let configs_vec: Vec<ConfigInfo> = configs.values().cloned().collect();
     
     ApiListTemplate {
         configs: configs_vec,
+        user,
     }
 }
 
 // Public functions for use by aether-mcp
 
 /// Render home page template
-pub fn render_home() -> HomeTemplate {
-    HomeTemplate
+pub fn render_home(user: Option<&UserInfo>) -> HomeTemplate {
+    HomeTemplate { 
+        user: user.cloned() 
+    }
 }
 
 /// Render APIs list template
-pub async fn render_apis(web_state: &WebState) -> ApiListTemplate {
+pub async fn render_apis(web_state: &WebState, user: Option<&UserInfo>) -> ApiListTemplate {
     let configs = web_state.configs.read().await;
     let configs_vec: Vec<ConfigInfo> = configs.values().cloned().collect();
     
     ApiListTemplate {
         configs: configs_vec,
+        user: user.cloned(),
     }
 }
 
@@ -311,6 +340,7 @@ pub async fn render_apis(web_state: &WebState) -> ApiListTemplate {
 pub async fn handle_upload_with_multi_server<F, Fut>(
     mut multipart: axum::extract::Multipart,
     web_state: &WebState,
+    user: Option<UserInfo>,
     add_config_fn: F,
 ) -> UploadResultTemplate 
 where 
@@ -332,6 +362,7 @@ where
                     Err(_) => return UploadResultTemplate {
                         success: false,
                         message: "Failed to read API name".to_string(),
+                        user,
                     },
                 }
             }
@@ -341,6 +372,7 @@ where
                     Err(_) => return UploadResultTemplate {
                         success: false,
                         message: "Failed to read base URL".to_string(),
+                        user,
                     },
                 }
             }
@@ -350,6 +382,7 @@ where
                     Err(_) => return UploadResultTemplate {
                         success: false,
                         message: "Failed to read OpenAPI file".to_string(),
+                        user,
                     },
                 }
             }
@@ -361,6 +394,7 @@ where
         return UploadResultTemplate {
             success: false,
             message: "Missing required fields".to_string(),
+            user,
         };
     }
 
@@ -392,6 +426,7 @@ where
                             UploadResultTemplate {
                                 success: true,
                                 message: format!("Successfully generated and configured API: {}", api_name),
+                                user,
                             }
                         }
                         Err(e) => {
@@ -399,6 +434,7 @@ where
                             UploadResultTemplate {
                                 success: false,
                                 message: "Failed to serialize configuration".to_string(),
+                                user,
                             }
                         }
                     }
@@ -408,6 +444,7 @@ where
                     UploadResultTemplate {
                         success: false,
                         message: format!("Failed to configure API: {}", e),
+                        user,
                     }
                 }
             }
@@ -417,6 +454,7 @@ where
             UploadResultTemplate {
                 success: false,
                 message: format!("Failed to generate config: {}", e),
+                user,
             }
         }
     }
