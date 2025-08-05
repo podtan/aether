@@ -11,7 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-use tower_sessions::{MemoryStore, SessionManagerLayer};
+use tower_sessions::{MemoryStore, SessionManagerLayer, Session};
 use tracing::{error, info};
 
 use aether_config::AetherConfig;
@@ -167,7 +167,7 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
 
 /// Redirect to login page
 async fn login_redirect() -> impl IntoResponse {
-    Redirect::to("/auth/login")
+    Redirect::to("/web/auth/login")
 }
 
 /// Health check endpoint

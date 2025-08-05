@@ -117,13 +117,13 @@ async fn oidc_login(
     State(_app_state): State<AppState>,
 ) -> impl IntoResponse {
     // For now, just redirect to a placeholder
-    Redirect::to("/login?error=not_implemented")
+    Redirect::to("/web/login?error=not_implemented")
 }
 
 /// Handle OIDC callback
 async fn oidc_callback() -> impl IntoResponse {
     // For now, just redirect to home
-    Redirect::to("/")
+    Redirect::to("/web/")
 }
 
 /// Development mode login
@@ -131,13 +131,13 @@ async fn dev_login(
     State(_app_state): State<AppState>,
 ) -> impl IntoResponse {
     // For now, just redirect to home
-    Redirect::to("/")
+    Redirect::to("/web/")
 }
 
 /// Handle logout
 async fn logout() -> impl IntoResponse {
     info!("User logged out");
-    Redirect::to("/login")
+    Redirect::to("/web/login")
 }
 
 /// Check if user has admin role
