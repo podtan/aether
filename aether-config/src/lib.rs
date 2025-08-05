@@ -244,4 +244,9 @@ impl AetherConfig {
         info!("TOML configuration loaded successfully");
         Ok(config)
     }
+
+    /// Check if web authentication is configured (has OIDC, session, or dev config)
+    pub fn has_web_authentication(&self) -> bool {
+        self.oidc.is_some() || self.session.is_some() || self.dev.is_some()
+    }
 }

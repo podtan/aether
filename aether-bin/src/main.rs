@@ -204,10 +204,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             info!("Starting MCP server with HTTP transport on {}", bind_addr);
             
-            // Start the MCP SSE server
-            if let Err(e) = server::start_sse_server(config, bind_addr).await {
-                error!("Server error: {}", e);
-                std::process::exit(1);
+            // Check if web authentication is configured
+            if config.has_web_authentication() {
+                info!("Web authentication detected, starting combined MCP + Web server");
+                
+                // Start the combined MCP + Web server
+                if let Err(e) = server::start_combined_server(config, bind_addr).await {
+                    error!("Combined server error: {}", e);
+                    std::process::exit(1);
+                }
+            } else {
+                // Start the MCP SSE server only
+                if let Err(e) = server::start_sse_server(config, bind_addr).await {
+                    error!("Server error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
     }
