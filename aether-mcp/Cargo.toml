@@ -33,6 +33,7 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
 tokio-stream = "0.1"
+tower-sessions = "0.14"
 
 [dev-dependencies]
 rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }

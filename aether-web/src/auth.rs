@@ -253,7 +253,7 @@ async fn oidc_callback(
                                 let _ = session.remove::<String>("pkce_verifier").await;
                                 
                                 info!("User {} logged in successfully", user_info.email);
-                                return Redirect::to("/web/");
+                                return Redirect::to("/web/ui");
                             }
                             Err(e) => {
                                 warn!("Failed to exchange code for token: {}", e);
@@ -410,7 +410,7 @@ async fn dev_login(
             }
             
             info!("Dev user {} logged in successfully", user_info.email);
-            return Redirect::to("/web/");
+            return Redirect::to("/web/ui");
         }
     }
     

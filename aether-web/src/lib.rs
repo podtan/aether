@@ -21,7 +21,7 @@ use aether_config::AetherConfig;
 use aether_config::generator;
 
 mod auth;
-pub use auth::{AuthState, UserInfo, UserRole};
+pub use auth::{AuthState, UserInfo, UserRole, get_current_user};
 
 #[cfg(test)]
 mod tests;
@@ -141,7 +141,6 @@ impl IntoResponse for UploadResultTemplate {
 /// Create the web UI router with authentication
 pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
     let app_state = AppState::new(config).await?;
-    
     // Session configuration
     let session_config = config.session.as_ref().ok_or_else(|| {
         anyhow::anyhow!("Session configuration is required")
@@ -158,6 +157,65 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
         .route("/", get(home_page))
         .route("/ui", get(home_page))  // Also accessible as /ui
         .route("/upload", post(handle_upload_openapi))
+        .route("/apis", get(handle_list_apis))
+        .layer(middleware::from_fn(auth::auth_middleware));
+
+    let router = Router::new()
+        // Public routes (no authentication required)
+        .route("/login", get(login_redirect))
+        .route("/health", get(health_check))
+        
+        // Auth routes (always public)
+        .nest("/auth", auth::create_auth_router())
+        
+        // Protected routes
+        .merge(protected_routes)
+        
+        .with_state(app_state)
+        .layer(session_layer);
+
+    Ok(router)
+}
+
+/// Create the web UI router with authentication and multi-config callback
+pub async fn create_router_with_upload_callback<F, Fut>(
+    config: &AetherConfig, 
+    upload_callback: F
+) -> anyhow::Result<Router> 
+where
+    F: Fn(axum::extract::Multipart, Option<UserInfo>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: std::future::Future<Output = UploadResultTemplate> + Send + 'static,
+{
+    let app_state = AppState::new(config).await?;
+    
+    // Session configuration
+    let session_config = config.session.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Session configuration is required")
+    })?;
+    
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false) // Set to true in production with HTTPS
+        .with_http_only(true)
+        .with_name(session_config.cookie_name.clone());
+
+    // Create the upload handler with callback integration
+    let upload_handler = {
+        let callback = upload_callback.clone();
+        move |session: Session, multipart: axum::extract::Multipart| {
+            let callback = callback.clone();
+            async move {
+                let user = auth::get_current_user(session).await;
+                callback(multipart, user).await
+            }
+        }
+    };
+
+    // Protected routes (require authentication)
+    let protected_routes = Router::new()
+        .route("/", get(home_page))
+        .route("/ui", get(home_page))  // Also accessible as /ui
+        .route("/upload", post(upload_handler))  // Use the callback-based handler
         .route("/apis", get(handle_list_apis))
         .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -406,15 +464,17 @@ where
     ).await {
         Ok(config) => {
             // Add to multi-server using the provided callback
+            info!("🔄 Calling multi-server callback for API: {}", api_name);
             match add_config_fn(api_name.clone(), config.clone(), openapi_content.clone()).await {
                 Ok(()) => {
+                    info!("✅ Multi-server callback succeeded for API: {}", api_name);
                     // Also update web state for UI
                     match serde_yaml::to_string(&config) {
                         Ok(config_yaml) => {
                             let config_info = ConfigInfo {
                                 api_name: api_name.clone(),
                                 openapi_content,
-                                config_content: config_yaml,
+                                config_content: config_yaml,  
                                 base_url,
                                 created_at: chrono::Utc::now(),
                                 updated_at: chrono::Utc::now(),
@@ -440,7 +500,7 @@ where
                     }
                 }
                 Err(e) => {
-                    error!("Failed to add API to multi-server: {}", e);
+                    error!("❌ Multi-server callback failed for API {}: {}", api_name, e);
                     UploadResultTemplate {
                         success: false,
                         message: format!("Failed to configure API: {}", e),
