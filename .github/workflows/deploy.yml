@@ -1,0 +1,91 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+    - name: Cache cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    - name: Build workspace
+      run: cargo build --release --workspace
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v1.1.0
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        port: ${{ secrets.SERVER_PORT }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          # Create deployment directory
+          sudo mkdir -p /opt/aether/backup
+          # Backup existing binary if it exists
+          if [ -f /opt/aether/aether ]; then
+            sudo cp /opt/aether/aether /opt/aether/backup/aether.bak.$(date +%Y%m%d_%H%M%S)
+          fi
+    - name: Copy binary to server
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        port: ${{ secrets.SERVER_PORT }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        source: "target/release/aether"
+        target: "/tmp/aether-deploy/"
+        strip_components: 2
+    - name: Move binary, set permissions, and restart service
+      uses: appleboy/ssh-action@v1.1.0
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        port: ${{ secrets.SERVER_PORT }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          # Move binary from /tmp/aether-deploy to /opt/aether
+          sudo mv /tmp/aether-deploy/aether /opt/aether/aether
+          # Set executable permissions
+          sudo chmod +x /opt/aether/aether
+          # Clean up old backups (keep only last 5)
+          sudo find /opt/aether/backup -name "*.bak.*" -type f | sort -r | tail -n +6 | xargs -r sudo rm -f
+          # Create systemd service for aether if it does not exist
+          if [ ! -f /etc/systemd/system/aether.service ]; then
+            sudo tee /etc/systemd/system/aether.service > /dev/null <<EOF
+            [Unit]
+            Description=Aether Service
+            After=network.target
+
+            [Service]
+            Type=simple
+            ExecStart=/opt/aether/aether --multi-config --configs-dir /opt/aether/configs
+            WorkingDirectory=/opt/aether
+            Restart=on-failure
+            User=${USER}
+            Environment=CONFIG_PATH=/opt/aether/config.toml
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            sudo systemctl daemon-reload
+            sudo systemctl enable aether
+          fi
+          # Restart service
+          sudo systemctl restart aether || true
+          echo "Deployment completed successfully"
