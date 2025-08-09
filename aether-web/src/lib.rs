@@ -252,6 +252,74 @@ where
     Ok(router)
 }
 
+/// Create the web UI router with authentication and existing WebState with runtime API callback
+pub async fn create_router_with_existing_web_state<F, Fut>(
+    config: &AetherConfig,
+    web_state: WebState,
+    upload_callback: F
+) -> anyhow::Result<Router> 
+where
+    F: Fn(axum::extract::Multipart, Option<UserInfo>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: std::future::Future<Output = UploadResultTemplate> + Send + 'static,
+{
+    let auth = AuthState::new(
+        config.oidc.as_ref(), 
+        config.dev.clone()
+    ).await?;
+    
+    let app_state = AppState {
+        web: web_state,
+        auth,
+    };
+    
+    // Session configuration
+    let session_config = config.session.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Session configuration is required")
+    })?;
+    
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false) // Set to true in production with HTTPS
+        .with_http_only(true)
+        .with_name(session_config.cookie_name.clone());
+
+    // Create the upload handler with callback integration
+    let upload_handler = {
+        let callback = upload_callback.clone();
+        move |session: Session, multipart: axum::extract::Multipart| {
+            let callback = callback.clone();
+            async move {
+                let user = auth::get_current_user(session).await;
+                callback(multipart, user).await
+            }
+        }
+    };
+
+    // Protected routes (require authentication)
+    let protected_routes = Router::new()
+        .route("/", get(home_page))
+        .route("/ui", get(home_page))  // Also accessible as /ui
+        .route("/upload", post(upload_handler))  // Use the callback-based handler
+        .route("/apis", get(handle_list_apis))
+        .layer(middleware::from_fn(auth::auth_middleware));
+
+    let router = Router::new()
+        // Public routes (no authentication required)
+        .route("/login", get(login_redirect))
+        .route("/health", get(health_check))
+        
+        // Auth routes (always public)
+        .nest("/auth", auth::create_auth_router())
+        
+        // Protected routes
+        .merge(protected_routes)
+        
+        .with_state(app_state)
+        .layer(session_layer);
+
+    Ok(router)
+}
+
 /// Redirect to login page
 async fn login_redirect() -> Redirect {
     Redirect::to("/web/auth/login")

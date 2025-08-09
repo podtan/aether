@@ -90,7 +90,10 @@ async fn test_login_template_rendering() {
     use askama::Template;
     
     // Test dev mode template
-    let dev_template = crate::LoginTemplate { is_dev_mode: true };
+    let dev_template = crate::LoginTemplate { 
+        is_dev_mode: true,
+        error: None 
+    };
     let rendered = dev_template.render();
     assert!(rendered.is_ok(), "Dev mode login template should render");
     let html = rendered.unwrap();
@@ -98,7 +101,10 @@ async fn test_login_template_rendering() {
     assert!(html.contains("Development Login"), "Should show dev login button");
     
     // Test non-dev mode template  
-    let prod_template = crate::LoginTemplate { is_dev_mode: false };
+    let prod_template = crate::LoginTemplate { 
+        is_dev_mode: false,
+        error: None 
+    };
     let rendered = prod_template.render();
     assert!(rendered.is_ok(), "Production login template should render");
     let html = rendered.unwrap();
@@ -113,7 +119,9 @@ async fn test_login_template_rendering() {
 async fn test_home_template_rendering() {
     use askama::Template;
     
-    let template = crate::HomeTemplate;
+    let template = crate::HomeTemplate { 
+        user: None 
+    };
     let rendered = template.render();
     assert!(rendered.is_ok(), "Home template should render");
     let html = rendered.unwrap();
@@ -121,4 +129,75 @@ async fn test_home_template_rendering() {
     assert!(html.contains("Upload OpenAPI Specification"), "Should contain upload form");
     
     println!("✅ Home template renders correctly");
+}
+
+#[tokio::test]
+async fn test_apis_template_with_runtime_apis() {
+    use askama::Template;
+    
+    // Test ApiListTemplate with both uploaded and runtime APIs
+    let mut configs = Vec::new();
+    
+    // Add a simulated uploaded API
+    configs.push(crate::ConfigInfo {
+        api_name: "uploaded-api".to_string(),
+        openapi_content: "{}".to_string(),
+        config_content: "{}".to_string(),
+        base_url: "https://api.example.com".to_string(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    });
+    
+    // Add a simulated runtime API (these would normally be added by the runtime callback)
+    configs.push(crate::ConfigInfo {
+        api_name: "runtime-api".to_string(),
+        openapi_content: "".to_string(), // Runtime APIs have minimal info
+        config_content: "".to_string(),
+        base_url: "".to_string(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    });
+    
+    let template = crate::ApiListTemplate {
+        configs,
+        user: None,
+    };
+    
+    let rendered = template.render();
+    assert!(rendered.is_ok(), "API list template should render");
+    let html = rendered.unwrap();
+    
+    // Verify both APIs are displayed
+    assert!(html.contains("uploaded-api"), "Should contain uploaded API");
+    assert!(html.contains("runtime-api"), "Should contain runtime API");
+    assert!(html.contains("https://api.example.com"), "Should contain base URL for uploaded API");
+    
+    println!("✅ API list template renders correctly with both uploaded and runtime APIs");
+}
+
+#[tokio::test]
+async fn test_web_state_with_runtime_callback() {
+    // Test WebState with runtime APIs callback
+    let runtime_apis = vec!["test-api-1".to_string(), "test-api-2".to_string()];
+    let runtime_apis_clone = runtime_apis.clone();
+    
+    let callback = move || {
+        let apis = runtime_apis_clone.clone();
+        async move { apis }
+    };
+    
+    let web_state = crate::WebState::new_with_runtime_apis_callback(callback);
+    
+    // Verify callback is set
+    assert!(web_state.runtime_apis_callback.is_some(), "Runtime APIs callback should be set");
+    
+    // Test the callback
+    if let Some(callback) = &web_state.runtime_apis_callback {
+        let result = callback().await;
+        assert_eq!(result.len(), 2, "Should return 2 runtime APIs");
+        assert!(result.contains(&"test-api-1".to_string()), "Should contain test-api-1");
+        assert!(result.contains(&"test-api-2".to_string()), "Should contain test-api-2");
+    }
+    
+    println!("✅ WebState with runtime APIs callback works correctly");
 }
