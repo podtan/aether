@@ -67,22 +67,22 @@ jobs:
           sudo find /opt/aether/backup -name "*.bak.*" -type f | sort -r | tail -n +6 | xargs -r sudo rm -f
           # Create systemd service for aether if it does not exist
           if [ ! -f /etc/systemd/system/aether.service ]; then
-            sudo tee /etc/systemd/system/aether.service > /dev/null <<EOF
-            [Unit]
-            Description=Aether Service
-            After=network.target
+            sudo tee /etc/systemd/system/aether.service > /dev/null <<'EOF'
+          [Unit]
+          Description=Aether Service
+          After=network.target
 
-            [Service]
-            Type=simple
-            ExecStart=/opt/aether/aether --multi-config --configs-dir /opt/aether/configs
-            WorkingDirectory=/opt/aether
-            Restart=on-failure
-            User=${USER}
-            Environment=CONFIG_PATH=/opt/aether/config.toml
+          [Service]
+          Type=simple
+          ExecStart=/opt/aether/aether --multi-config --configs-dir /opt/aether/configs
+          WorkingDirectory=/opt/aether
+          Restart=on-failure
+          User=aether
+          Environment=CONFIG_PATH=/opt/aether/config.toml
 
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+          [Install]
+          WantedBy=multi-user.target
+          EOF
             sudo systemctl daemon-reload
             sudo systemctl enable aether
           fi
