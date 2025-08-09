@@ -483,8 +483,8 @@ impl MultiConfigTransport {
             }
         };
 
-        // Create web router with multi-config upload integration
-        let web_router = aether_web::create_router_with_upload_callback(web_config, upload_callback).await?;
+        // Create web router with multi-config upload integration using existing web_state
+        let web_router = aether_web::create_router_with_existing_web_state(web_config, self.web_state.clone(), upload_callback).await?;
 
         let mcp_router = Router::new()
             // Legacy single-API endpoints (for backwards compatibility)
