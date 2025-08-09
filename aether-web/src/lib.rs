@@ -37,6 +37,8 @@ pub struct AppState {
 #[derive(Clone)]
 pub struct WebState {
     pub configs: Arc<RwLock<HashMap<String, ConfigInfo>>>,
+    /// Optional callback to get runtime APIs list
+    pub runtime_apis_callback: Option<Arc<dyn Fn() -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync>>,
 }
 
 /// Information about a managed configuration
@@ -66,6 +68,20 @@ impl WebState {
     pub fn new() -> Self {
         Self {
             configs: Arc::new(RwLock::new(HashMap::new())),
+            runtime_apis_callback: None,
+        }
+    }
+
+    /// Create a new WebState with runtime APIs callback
+    pub fn new_with_runtime_apis_callback<F, Fut>(callback: F) -> Self 
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<String>> + Send + 'static,
+    {
+        let boxed_callback = move || Box::pin(callback()) as futures::future::BoxFuture<'static, Vec<String>>;
+        Self {
+            configs: Arc::new(RwLock::new(HashMap::new())),
+            runtime_apis_callback: Some(Arc::new(boxed_callback)),
         }
     }
 }
@@ -364,8 +380,38 @@ async fn handle_list_apis(
     session: Session,
 ) -> impl IntoResponse {
     let user = auth::get_current_user(session).await;
-    let configs = app_state.web.configs.read().await;
-    let configs_vec: Vec<ConfigInfo> = configs.values().cloned().collect();
+    let web_configs = app_state.web.configs.read().await;
+    let mut configs_vec: Vec<ConfigInfo> = web_configs.values().cloned().collect();
+    
+    // If we have a runtime APIs callback, also include APIs from there
+    if let Some(callback) = &app_state.web.runtime_apis_callback {
+        match callback().await {
+            runtime_apis => {
+                let runtime_apis_count = runtime_apis.len();
+                info!("Found {} runtime APIs from callback", runtime_apis_count);
+                
+                // Add runtime APIs that aren't already in the web configs
+                for api_name in runtime_apis {
+                    if !web_configs.contains_key(&api_name) {
+                        // For runtime APIs, we create a minimal ConfigInfo
+                        // In a real scenario, we might want to load the actual config details
+                        let config_info = ConfigInfo {
+                            api_name: api_name.clone(),
+                            openapi_content: "".to_string(), // Could be loaded from multi-server if needed
+                            config_content: "".to_string(),  // Could be loaded from multi-server if needed
+                            base_url: "".to_string(),        // Could be extracted from config if needed
+                            created_at: chrono::Utc::now(),  // We don't have the actual creation time
+                            updated_at: chrono::Utc::now(),
+                        };
+                        configs_vec.push(config_info);
+                    }
+                }
+                
+                info!("Total APIs to display: {} (web: {}, runtime: {})", 
+                      configs_vec.len(), web_configs.len(), runtime_apis_count);
+            }
+        }
+    }
     
     ApiListTemplate {
         configs: configs_vec,
@@ -384,8 +430,31 @@ pub fn render_home(user: Option<&UserInfo>) -> HomeTemplate {
 
 /// Render APIs list template
 pub async fn render_apis(web_state: &WebState, user: Option<&UserInfo>) -> ApiListTemplate {
-    let configs = web_state.configs.read().await;
-    let configs_vec: Vec<ConfigInfo> = configs.values().cloned().collect();
+    let web_configs = web_state.configs.read().await;
+    let mut configs_vec: Vec<ConfigInfo> = web_configs.values().cloned().collect();
+    
+    // If we have a runtime APIs callback, also include APIs from there
+    if let Some(callback) = &web_state.runtime_apis_callback {
+        match callback().await {
+            runtime_apis => {
+                // Add runtime APIs that aren't already in the web configs
+                for api_name in runtime_apis {
+                    if !web_configs.contains_key(&api_name) {
+                        // For runtime APIs, we create a minimal ConfigInfo
+                        let config_info = ConfigInfo {
+                            api_name: api_name.clone(),
+                            openapi_content: "".to_string(),
+                            config_content: "".to_string(),
+                            base_url: "".to_string(),
+                            created_at: chrono::Utc::now(),
+                            updated_at: chrono::Utc::now(),
+                        };
+                        configs_vec.push(config_info);
+                    }
+                }
+            }
+        }
+    }
     
     ApiListTemplate {
         configs: configs_vec,

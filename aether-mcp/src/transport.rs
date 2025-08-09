@@ -421,9 +421,20 @@ pub struct MultiConfigTransport {
 impl MultiConfigTransport {
     /// Create a new multi-config HTTP transport
     pub fn new(multi_server: MultiConfigServer, port: u16) -> Self {
+        let multi_server_arc = Arc::new(multi_server);
+        
+        // Create a callback that captures the multi_server to list APIs
+        let multi_server_for_callback = multi_server_arc.clone();
+        let runtime_apis_callback = move || {
+            let multi_server = multi_server_for_callback.clone();
+            async move {
+                multi_server.list_apis().await
+            }
+        };
+        
         Self {
-            multi_server: Arc::new(multi_server),
-            web_state: WebState::new(),
+            web_state: WebState::new_with_runtime_apis_callback(runtime_apis_callback),
+            multi_server: multi_server_arc,
             port,
         }
     }

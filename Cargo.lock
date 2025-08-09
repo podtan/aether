@@ -142,6 +142,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "futures",
  "openid",
  "rand 0.8.5",
  "reqwest 0.12.22",
