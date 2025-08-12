@@ -14,6 +14,8 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use tower_sessions::{MemoryStore, SessionManagerLayer, Session};
 use tracing::{error, info};
+use uuid;
+use openid;
 
 use aether_config::AetherConfig;
 
@@ -214,6 +216,8 @@ pub async fn create_router_with_mcp_client(config: &AetherConfig, mcp_url: &str)
         
         // Auth routes (always public)
         .route("/auth/login", get(auth_login_with_client))
+        .route("/auth/oidc/login", post(oidc_login_with_client))
+        .route("/auth/dev/login", post(dev_login_with_client))
         .route("/auth/callback", get(auth_callback_with_client))
         .route("/auth/logout", post(auth_logout_with_client))
         
@@ -904,4 +908,81 @@ async fn auth_logout_with_client(
     session.clear().await;
     
     Redirect::to("/login")
+}
+
+/// OIDC login handler for client-based app
+async fn oidc_login_with_client(
+    State(app_state): State<AppStateWithClient>,
+    session: Session,
+) -> impl IntoResponse {
+    if let Some(oidc_client) = &app_state.auth.oidc_client {
+        // Generate a random state for CSRF protection
+        let state = uuid::Uuid::new_v4().to_string();
+        
+        // Generate PKCE parameters
+        let pkce_params = auth::PkceParams::new();
+        
+        // Store the state and PKCE verifier in the session
+        if let Err(e) = session.insert("oauth_state", &state).await {
+            tracing::warn!("Failed to store OAuth state in session: {}", e);
+            return Redirect::to("/login?error=session_error");
+        }
+        
+        if let Err(e) = session.insert("pkce_verifier", &pkce_params.code_verifier).await {
+            tracing::warn!("Failed to store PKCE verifier in session: {}", e);
+            return Redirect::to("/login?error=session_error");
+        }
+        
+        // Manually build the authorization URL with PKCE parameters
+        let auth_url = oidc_client.auth_url(&openid::Options {
+            scope: Some("openid email profile".to_string()),
+            state: Some(state),
+            ..Default::default()
+        });
+        
+        // Add PKCE parameters to the URL
+        let mut url_with_pkce = auth_url.clone();
+        url_with_pkce.query_pairs_mut()
+            .append_pair("code_challenge", &pkce_params.code_challenge)
+            .append_pair("code_challenge_method", "S256");
+        
+        tracing::debug!("Redirecting to OIDC authorization URL with PKCE: {}", url_with_pkce);
+        Redirect::to(&url_with_pkce.to_string())
+    } else {
+        // OIDC client not available, redirect with error
+        Redirect::to("/login?error=oidc_not_configured")
+    }
+}
+
+/// Development login handler for client-based app
+async fn dev_login_with_client(
+    State(app_state): State<AppStateWithClient>,
+    session: Session,
+) -> impl IntoResponse {
+    if let Some(dev_config) = &app_state.auth.dev_config {
+        if dev_config.local_dev_mode {
+            // Create a dev user
+            let user_info = auth::UserInfo {
+                sub: "dev_user".to_string(),
+                email: dev_config.local_dev_email.clone(),
+                name: dev_config.local_dev_name.clone(),
+                role: if dev_config.local_dev_role == "admin" { 
+                    auth::UserRole::Admin 
+                } else { 
+                    auth::UserRole::User 
+                },
+            };
+            
+            // Store user info in session
+            if let Err(e) = session.insert("user_info", &user_info).await {
+                tracing::warn!("Failed to store dev user info in session: {}", e);
+                return Redirect::to("/login?error=session_error");
+            }
+            
+            info!("Dev user {} logged in successfully", user_info.email);
+            return Redirect::to("/ui");
+        }
+    }
+    
+    Redirect::to("/login?error=dev_mode_disabled")
 }

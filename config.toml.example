@@ -10,7 +10,7 @@ provider = "kanidm"
 issuer_url = "https://kanidm.example.com"
 client_id = "your_client_id_here"
 client_secret = "your_client_secret_here"
-redirect_url = "http://localhost:8080/auth/callback"
+redirect_url = "http://localhost:9001/auth/callback"
 code_challenge_method = "S256"
 scope = "openid email profile"
 
