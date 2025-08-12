@@ -14,7 +14,7 @@ use axum::{
 };
 use serde::{Deserialize};
 use serde_json::Value;
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, net::SocketAddr};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::StreamExt;
 use tower::ServiceBuilder;
@@ -47,16 +47,16 @@ impl SseState {
 pub struct HttpSseTransport {
     server: Arc<McpServer>,
     sse_state: Arc<SseState>,
-    port: u16,
+    bind_addr: SocketAddr,
 }
 
 impl HttpSseTransport {
     /// Create a new HTTP SSE transport
-    pub fn new(server: McpServer, port: u16) -> Self {
+    pub fn new(server: McpServer, bind_addr: SocketAddr) -> Self {
         Self {
             server: Arc::new(server),
             sse_state: SseState::new(),
-            port,
+            bind_addr,
         }
     }
 
@@ -82,11 +82,10 @@ impl HttpSseTransport {
             )
             .with_state(app_state);
 
-        let addr = format!("0.0.0.0:{}", self.port);
-        info!("Starting MCP HTTP SSE server on {}", addr);
+        info!("Starting MCP HTTP SSE server on {}", self.bind_addr);
 
-        let listener = tokio::net::TcpListener::bind(&addr).await
-            .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", addr, e))?;
+        let listener = tokio::net::TcpListener::bind(self.bind_addr).await
+            .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", self.bind_addr, e))?;
         axum::serve(listener, app).await
             .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
 
@@ -415,12 +414,12 @@ impl StdioTransport {
 pub struct MultiConfigTransport {
     multi_server: Arc<MultiConfigServer>,
     web_state: WebState,
-    port: u16,
+    bind_addr: SocketAddr,
 }
 
 impl MultiConfigTransport {
     /// Create a new multi-config HTTP transport
-    pub fn new(multi_server: MultiConfigServer, port: u16) -> Self {
+    pub fn new(multi_server: MultiConfigServer, bind_addr: SocketAddr) -> Self {
         let multi_server_arc = Arc::new(multi_server);
         
         // Create a callback that captures the multi_server to list APIs
@@ -435,7 +434,7 @@ impl MultiConfigTransport {
         Self {
             web_state: WebState::new_with_runtime_apis_callback(runtime_apis_callback),
             multi_server: multi_server_arc,
-            port,
+            bind_addr,
         }
     }
 
@@ -562,11 +561,10 @@ impl MultiConfigTransport {
             )
             .with_state(multi_state);
 
-        let addr = format!("0.0.0.0:{}", self.port);
-        info!("Starting Multi-Config MCP HTTP server on {}", addr);
+        info!("Starting Multi-Config MCP HTTP server on {}", self.bind_addr);
 
-        let listener = tokio::net::TcpListener::bind(&addr).await
-            .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", addr, e))?;
+        let listener = tokio::net::TcpListener::bind(self.bind_addr).await
+            .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", self.bind_addr, e))?;
         axum::serve(listener, app).await
             .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
 
