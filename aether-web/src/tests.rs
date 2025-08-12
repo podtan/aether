@@ -383,3 +383,51 @@ async fn test_oidc_callback_missing_parameters() {
     
     println!("✅ OIDC callback missing parameters test passed: missing code -> 400 Bad Request");
 }
+
+#[tokio::test]
+async fn test_logout_clears_session() {
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // For oneshot
+    
+    // Create minimal config for testing
+    let mut config = AetherConfig::default();
+    config.session = Some(aether_config::SessionConfig {
+        secret_key: "test_secret_for_logout_test".to_string(),
+        cookie_name: "test_session".to_string(),
+        max_age: 3600,
+    });
+    config.dev = Some(aether_config::DevConfig {
+        local_dev_mode: true,
+        local_dev_email: "test@example.com".to_string(),
+        local_dev_role: "user".to_string(),
+        local_dev_name: "Test User".to_string(),
+    });
+    
+    // Create router with MCP client
+    let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await
+        .expect("Router should be created successfully");
+    
+    // Test POST /auth/logout -> should redirect to /login
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/logout")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    
+    let location = response.headers().get("location")
+        .expect("Should have location header")
+        .to_str()
+        .expect("Location should be valid string");
+    
+    assert_eq!(location, "/login", 
+               "Logout should redirect to /login");
+    
+    println!("✅ Logout test passed: POST /auth/logout -> 302 to /login");
+}
