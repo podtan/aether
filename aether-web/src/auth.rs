@@ -21,6 +21,19 @@ use uuid::Uuid;
 use aether_config::{OidcConfig, DevConfig};
 use crate::AppState;
 
+/// Base path for standalone mode (empty string)
+const STANDALONE_BASE_PATH: &str = "";
+
+/// Helper function to create redirects with the correct base path for standalone mode
+fn redirect_to_path(path: &str) -> Redirect {
+    let full_path = if path.starts_with('/') {
+        format!("{}{}", STANDALONE_BASE_PATH, path)
+    } else {
+        format!("{}/{}", STANDALONE_BASE_PATH, path)
+    };
+    Redirect::to(&full_path)
+}
+
 /// PKCE parameters for OAuth2 authorization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PkceParams {
@@ -149,7 +162,7 @@ pub async fn auth_middleware(
         next.run(request).await
     } else {
         // User is not authenticated, redirect to login
-        Redirect::to("/web/login").into_response()
+        redirect_to_path("/login").into_response()
     }
 }
 
@@ -173,10 +186,10 @@ async fn login_page(
     State(app_state): State<AppState>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let template = crate::LoginTemplate {
-        is_dev_mode: app_state.auth.is_dev_mode(),
-        error: params.get("error").cloned(),
-    };
+    let template = crate::LoginTemplate::new_standalone(
+        app_state.auth.is_dev_mode(),
+        params.get("error").cloned(),
+    );
     template
 }
 
@@ -195,12 +208,12 @@ async fn oidc_login(
         // Store the state and PKCE verifier in the session
         if let Err(e) = session.insert("oauth_state", &state).await {
             warn!("Failed to store OAuth state in session: {}", e);
-            return Redirect::to("/web/login?error=session_error");
+            return redirect_to_path("/login?error=session_error");
         }
         
         if let Err(e) = session.insert("pkce_verifier", &pkce_params.code_verifier).await {
             warn!("Failed to store PKCE verifier in session: {}", e);
-            return Redirect::to("/web/login?error=session_error");
+            return redirect_to_path("/login?error=session_error");
         }
         
         // Manually build the authorization URL with PKCE parameters
@@ -220,7 +233,7 @@ async fn oidc_login(
         Redirect::to(&url_with_pkce.to_string())
     } else {
         // OIDC client not available, redirect with error
-        Redirect::to("/web/login?error=oidc_not_configured")
+        redirect_to_path("/login?error=oidc_not_configured")
     }
 }
 
@@ -245,7 +258,7 @@ async fn oidc_callback(
                                 // Store user info in session
                                 if let Err(e) = session.insert("user_info", &user_info).await {
                                     warn!("Failed to store user info in session: {}", e);
-                                    return Redirect::to("/web/login?error=session_error");
+                                    return redirect_to_path("/login?error=session_error");
                                 }
                                 
                                 // Clean up session data
@@ -253,41 +266,41 @@ async fn oidc_callback(
                                 let _ = session.remove::<String>("pkce_verifier").await;
                                 
                                 info!("User {} logged in successfully", user_info.email);
-                                return Redirect::to("/web/ui");
+                                return redirect_to_path("/ui");
                             }
                             Err(e) => {
                                 warn!("Failed to exchange code for token: {}", e);
-                                return Redirect::to("/web/login?error=token_exchange_failed");
+                                return redirect_to_path("/login?error=token_exchange_failed");
                             }
                         }
                     }
                     Ok(None) => {
                         warn!("No PKCE verifier found in session");
-                        return Redirect::to("/web/login?error=no_pkce_verifier");
+                        return redirect_to_path("/login?error=no_pkce_verifier");
                     }
                     Err(e) => {
                         warn!("Failed to get PKCE verifier from session: {}", e);
-                        return Redirect::to("/web/login?error=session_error");
+                        return redirect_to_path("/login?error=session_error");
                     }
                 }
             }
             Ok(Some(_)) => {
                 warn!("OAuth state mismatch");
-                return Redirect::to("/web/login?error=state_mismatch");
+                return redirect_to_path("/login?error=state_mismatch");
             }
             Ok(None) => {
                 warn!("No OAuth state found in session");
-                return Redirect::to("/web/login?error=no_state");
+                return redirect_to_path("/login?error=no_state");
             }
             Err(e) => {
                 warn!("Failed to get OAuth state from session: {}", e);
-                return Redirect::to("/web/login?error=session_error");
+                return redirect_to_path("/login?error=session_error");
             }
         }
     }
     
     // Fallback error
-    Redirect::to("/web/login?error=callback_failed")
+    redirect_to_path("/login?error=callback_failed")
 }
 
 /// Exchange authorization code for tokens using PKCE
@@ -406,15 +419,15 @@ async fn dev_login(
             // Store user info in session
             if let Err(e) = session.insert("user_info", &user_info).await {
                 warn!("Failed to store dev user info in session: {}", e);
-                return Redirect::to("/web/login?error=session_error");
+                return redirect_to_path("/login?error=session_error");
             }
             
             info!("Dev user {} logged in successfully", user_info.email);
-            return Redirect::to("/web/ui");
+            return redirect_to_path("/ui");
         }
     }
     
-    Redirect::to("/web/login?error=dev_mode_disabled")
+    redirect_to_path("/login?error=dev_mode_disabled")
 }
 
 /// Handle logout
@@ -430,7 +443,7 @@ async fn logout(session: Session) -> Redirect {
     }
     
     info!("User logged out");
-    Redirect::to("/web/login")
+    redirect_to_path("/login")
 }
 
 /// Check if user has admin role

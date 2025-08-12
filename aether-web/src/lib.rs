@@ -22,6 +22,12 @@ use aether_config::AetherConfig;
 // Re-export the MultiConfigServer for use in public functions
 use aether_config::generator;
 
+/// Base path for standalone mode (empty string)
+const STANDALONE_BASE_PATH: &str = "";
+
+/// Base path for combined mode (when mounted under /web)  
+const COMBINED_BASE_PATH: &str = "/web";
+
 mod auth;
 pub use auth::{AuthState, UserInfo, UserRole, get_current_user, AuthCallback, exchange_token_with_pkce};
 
@@ -131,6 +137,17 @@ impl WebState {
 #[template(path = "home.html")]
 pub struct HomeTemplate {
     pub user: Option<UserInfo>,
+    pub base_path: String,
+}
+
+impl HomeTemplate {
+    /// Create a new HomeTemplate with standalone base path
+    pub fn new_standalone(user: Option<UserInfo>) -> Self {
+        Self {
+            user,
+            base_path: STANDALONE_BASE_PATH.to_string(),
+        }
+    }
 }
 
 impl IntoResponse for HomeTemplate {
@@ -148,6 +165,18 @@ impl IntoResponse for HomeTemplate {
 pub struct LoginTemplate {
     pub is_dev_mode: bool,
     pub error: Option<String>,
+    pub base_path: String,
+}
+
+impl LoginTemplate {
+    /// Create a new LoginTemplate with standalone base path
+    pub fn new_standalone(is_dev_mode: bool, error: Option<String>) -> Self {
+        Self {
+            is_dev_mode,
+            error,
+            base_path: STANDALONE_BASE_PATH.to_string(),
+        }
+    }
 }
 
 impl IntoResponse for LoginTemplate {
@@ -165,6 +194,18 @@ impl IntoResponse for LoginTemplate {
 pub struct ApiListTemplate {
     pub configs: Vec<ConfigInfo>,
     pub user: Option<UserInfo>,
+    pub base_path: String,
+}
+
+impl ApiListTemplate {
+    /// Create a new ApiListTemplate with standalone base path
+    pub fn new_standalone(configs: Vec<ConfigInfo>, user: Option<UserInfo>) -> Self {
+        Self {
+            configs,
+            user,
+            base_path: STANDALONE_BASE_PATH.to_string(),
+        }
+    }
 }
 
 impl IntoResponse for ApiListTemplate {
@@ -183,6 +224,19 @@ pub struct UploadResultTemplate {
     pub success: bool,
     pub message: String,
     pub user: Option<UserInfo>,
+    pub base_path: String,
+}
+
+impl UploadResultTemplate {
+    /// Create a new UploadResultTemplate with standalone base path
+    pub fn new_standalone(success: bool, message: String, user: Option<UserInfo>) -> Self {
+        Self {
+            success,
+            message,
+            user,
+            base_path: STANDALONE_BASE_PATH.to_string(),
+        }
+    }
 }
 
 impl IntoResponse for UploadResultTemplate {
@@ -374,7 +428,7 @@ async fn health_check() -> &'static str {
 /// Main dashboard page  
 async fn home_page(session: Session) -> HomeTemplate {
     let user = auth::get_current_user(session).await;
-    HomeTemplate { user }
+    HomeTemplate::new_standalone(user)
 }
 
 /// Handle OpenAPI file upload
@@ -396,31 +450,19 @@ async fn handle_upload_openapi(
             "api_name" => {
                 match field.text().await {
                     Ok(text) => api_name = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read API name".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read API name".to_string(), user),
                 }
             }
             "base_url" => {
                 match field.text().await {
                     Ok(text) => base_url = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read base URL".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read base URL".to_string(), user),
                 }
             }
             "openapi_file" => {
                 match field.text().await {
                     Ok(text) => openapi_content = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read OpenAPI file".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read OpenAPI file".to_string(), user),
                 }
             }
             _ => {}
@@ -428,11 +470,7 @@ async fn handle_upload_openapi(
     }
 
     if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return UploadResultTemplate {
-            success: false,
-            message: "Missing required fields".to_string(),
-            user,
-        };
+        return UploadResultTemplate::new_standalone(false, "Missing required fields".to_string(), user);
     }
 
     // Generate config using existing generator
@@ -456,29 +494,25 @@ async fn handle_upload_openapi(
                     app_state.web.configs.write().await.insert(api_name.clone(), config_info);
                     info!("Generated config for API: {}", api_name);
 
-                    UploadResultTemplate {
-                        success: true,
-                        message: format!("Successfully generated config for API: {}", api_name),
+                    UploadResultTemplate::new_standalone(
+                        true,
+                        format!("Successfully generated config for API: {}", api_name),
                         user,
-                    }
+                    )
                 }
                 Err(e) => {
                     error!("Failed to serialize config: {}", e);
-                    UploadResultTemplate {
-                        success: false,
-                        message: "Failed to serialize configuration".to_string(),
-                        user,
-                    }
+                    UploadResultTemplate::new_standalone(false, "Failed to serialize configuration".to_string(), user)
                 }
             }
         }
         Err(e) => {
             error!("Failed to generate config: {}", e);
-            UploadResultTemplate {
-                success: false,
-                message: format!("Failed to generate config: {}", e),
+            UploadResultTemplate::new_standalone(
+                false,
+                format!("Failed to generate config: {}", e),
                 user,
-            }
+            )
         }
     }
 }
@@ -522,19 +556,14 @@ async fn handle_list_apis(
         }
     }
     
-    ApiListTemplate {
-        configs: configs_vec,
-        user,
-    }
+    ApiListTemplate::new_standalone(configs_vec, user)
 }
 
 // Public functions for use by aether-mcp
 
 /// Render home page template
 pub fn render_home(user: Option<&UserInfo>) -> HomeTemplate {
-    HomeTemplate { 
-        user: user.cloned() 
-    }
+    HomeTemplate::new_standalone(user.cloned())
 }
 
 /// Render APIs list template
@@ -565,10 +594,7 @@ pub async fn render_apis(web_state: &WebState, user: Option<&UserInfo>) -> ApiLi
         }
     }
     
-    ApiListTemplate {
-        configs: configs_vec,
-        user: user.cloned(),
-    }
+    ApiListTemplate::new_standalone(configs_vec, user.cloned())
 }
 
 /// Handle upload with integration to multi-server
@@ -595,31 +621,19 @@ where
             "api_name" => {
                 match field.text().await {
                     Ok(text) => api_name = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read API name".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read API name".to_string(), user),
                 }
             }
             "base_url" => {
                 match field.text().await {
                     Ok(text) => base_url = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read base URL".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read base URL".to_string(), user),
                 }
             }
             "openapi_file" => {
                 match field.text().await {
                     Ok(text) => openapi_content = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read OpenAPI file".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read OpenAPI file".to_string(), user),
                 }
             }
             _ => {}
@@ -627,11 +641,7 @@ where
     }
 
     if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return UploadResultTemplate {
-            success: false,
-            message: "Missing required fields".to_string(),
-            user,
-        };
+        return UploadResultTemplate::new_standalone(false, "Missing required fields".to_string(), user);
     }
 
     // Generate config using existing generator
@@ -661,39 +671,35 @@ where
                             web_state.configs.write().await.insert(api_name.clone(), config_info);
                             info!("Generated config for API: {}", api_name);
 
-                            UploadResultTemplate {
-                                success: true,
-                                message: format!("Successfully generated and configured API: {}", api_name),
+                            UploadResultTemplate::new_standalone(
+                                true,
+                                format!("Successfully generated and configured API: {}", api_name),
                                 user,
-                            }
+                            )
                         }
                         Err(e) => {
                             error!("Failed to serialize config: {}", e);
-                            UploadResultTemplate {
-                                success: false,
-                                message: "Failed to serialize configuration".to_string(),
-                                user,
-                            }
+                            UploadResultTemplate::new_standalone(false, "Failed to serialize configuration".to_string(), user)
                         }
                     }
                 }
                 Err(e) => {
                     error!("❌ Multi-server callback failed for API {}: {}", api_name, e);
-                    UploadResultTemplate {
-                        success: false,
-                        message: format!("Failed to configure API: {}", e),
+                    UploadResultTemplate::new_standalone(
+                        false,
+                        format!("Failed to configure API: {}", e),
                         user,
-                    }
+                    )
                 }
             }
         }
         Err(e) => {
             error!("Failed to generate config: {}", e);
-            UploadResultTemplate {
-                success: false,
-                message: format!("Failed to generate config: {}", e),
+            UploadResultTemplate::new_standalone(
+                false,
+                format!("Failed to generate config: {}", e),
                 user,
-            }
+            )
         }
     }
 }
@@ -716,31 +722,19 @@ async fn handle_upload_openapi_with_client(
             "api_name" => {
                 match field.text().await {
                     Ok(text) => api_name = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read API name".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read API name".to_string(), user),
                 }
             }
             "base_url" => {
                 match field.text().await {
                     Ok(text) => base_url = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read base URL".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read base URL".to_string(), user),
                 }
             }
             "openapi_file" => {
                 match field.text().await {
                     Ok(text) => openapi_content = text,
-                    Err(_) => return UploadResultTemplate {
-                        success: false,
-                        message: "Failed to read OpenAPI file".to_string(),
-                        user,
-                    },
+                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read OpenAPI file".to_string(), user),
                 }
             }
             _ => {}
@@ -748,11 +742,7 @@ async fn handle_upload_openapi_with_client(
     }
 
     if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return UploadResultTemplate {
-            success: false,
-            message: "Missing required fields".to_string(),
-            user,
-        };
+        return UploadResultTemplate::new_standalone(false, "Missing required fields".to_string(), user);
     }
 
     // Call MCP admin API to upload the configuration
@@ -772,26 +762,22 @@ async fn handle_upload_openapi_with_client(
                 app_state.web.configs.write().await.insert(api_name.clone(), config_info);
                 info!("Successfully uploaded config for API: {}", api_name);
 
-                UploadResultTemplate {
-                    success: true,
-                    message: response.message.unwrap_or_else(|| format!("Successfully configured API: {}", api_name)),
+                UploadResultTemplate::new_standalone(
+                    true,
+                    response.message.unwrap_or_else(|| format!("Successfully configured API: {}", api_name)),
                     user,
-                }
+                )
             } else {
-                UploadResultTemplate {
-                    success: false,
-                    message: response.error.unwrap_or_else(|| "Upload failed".to_string()),
-                    user,
-                }
+                UploadResultTemplate::new_standalone(false, response.error.unwrap_or_else(|| "Upload failed".to_string()), user)
             }
         }
         Err(e) => {
             error!("Failed to upload via MCP client: {}", e);
-            UploadResultTemplate {
-                success: false,
-                message: format!("Failed to configure API: {}", e),
+            UploadResultTemplate::new_standalone(
+                false,
+                format!("Failed to configure API: {}", e),
                 user,
-            }
+            )
         }
     }
 }
@@ -841,15 +827,12 @@ async fn handle_list_apis_with_client(
         }
     }
     
-    ApiListTemplate {
-        configs: configs_vec,
-        user,
-    }
+    ApiListTemplate::new_standalone(configs_vec, user)
 }
 /// Main dashboard page for client-based app
 async fn home_page_with_client(session: Session) -> HomeTemplate {
     let user = auth::get_current_user(session).await;
-    HomeTemplate { user }
+    HomeTemplate::new_standalone(user)
 }
 
 /// Auth middleware for client-based app
@@ -878,10 +861,10 @@ async fn auth_login_with_client(
     State(app_state): State<AppStateWithClient>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    crate::LoginTemplate {
-        is_dev_mode: app_state.auth.is_dev_mode(),
-        error: params.get("error").cloned(),
-    }
+    LoginTemplate::new_standalone(
+        app_state.auth.is_dev_mode(),
+        params.get("error").cloned(),
+    )
 }
 
 /// Callback handler for client-based app  
