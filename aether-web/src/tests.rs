@@ -1,7 +1,7 @@
 use aether_config::AetherConfig;
 
 #[tokio::test]
-async fn test_router_creation() {
+async fn test_router_creation_with_mcp_client() {
     // Create minimal config
     let mut config = AetherConfig::default();
     config.session = Some(aether_config::SessionConfig {
@@ -11,16 +11,16 @@ async fn test_router_creation() {
     });
     
     // Should be able to create router without OIDC config (will use dev mode)
-    let router = crate::create_router(&config).await;
+    let router = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await;
     assert!(router.is_ok());
 }
 
 #[tokio::test]
-async fn test_full_config_example() {
+async fn test_full_config_example_with_mcp_client() {
     // Test with full OIDC config (would fail network connection but shouldn't panic)
     let config = create_full_test_config();
     
-    let result = crate::create_router(&config).await;
+    let result = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await;
     // This might fail due to network connectivity to OIDC provider, which is expected in tests
     match result {
         Ok(_) => println!("✅ Router created successfully with OIDC config"),
@@ -29,10 +29,10 @@ async fn test_full_config_example() {
 }
 
 #[tokio::test]
-async fn test_dev_mode_config() {
+async fn test_dev_mode_config_with_mcp_client() {
     let config = create_dev_mode_config();
     
-    let result = crate::create_router(&config).await;
+    let result = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await;
     assert!(result.is_ok(), "Dev mode router should always work");
     
     println!("✅ Dev mode router created successfully!");
@@ -200,4 +200,98 @@ async fn test_web_state_with_runtime_callback() {
     }
     
     println!("✅ WebState with runtime APIs callback works correctly");
+}
+
+#[tokio::test]
+async fn test_login_redirect_no_loop() {
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // For oneshot
+    
+    // Create minimal config for testing
+    let mut config = AetherConfig::default();
+    config.session = Some(aether_config::SessionConfig {
+        secret_key: "test_secret_for_redirect_test".to_string(),
+        cookie_name: "test_session".to_string(),
+        max_age: 3600,
+    });
+    config.dev = Some(aether_config::DevConfig {
+        local_dev_mode: true,
+        local_dev_email: "test@example.com".to_string(),
+        local_dev_role: "user".to_string(),
+        local_dev_name: "Test User".to_string(),
+    });
+    
+    // Create router with MCP client
+    let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await
+        .expect("Router should be created successfully");
+    
+    // Test GET /login -> should redirect to /auth/login (not /web/auth/login)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/login")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    
+    let location = response.headers().get("location")
+        .expect("Should have location header")
+        .to_str()
+        .expect("Location should be valid string");
+    
+    assert_eq!(location, "/auth/login", 
+               "Login redirect should go to /auth/login, not /web/auth/login");
+    
+    println!("✅ Login redirect test passed: GET /login -> 302 to /auth/login");
+}
+
+#[tokio::test]
+async fn test_auth_login_returns_page() {
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // For oneshot
+    
+    // Create minimal config for testing
+    let mut config = AetherConfig::default();
+    config.session = Some(aether_config::SessionConfig {
+        secret_key: "test_secret_for_auth_test".to_string(),
+        cookie_name: "test_session".to_string(),
+        max_age: 3600,
+    });
+    config.dev = Some(aether_config::DevConfig {
+        local_dev_mode: true,
+        local_dev_email: "test@example.com".to_string(),
+        local_dev_role: "user".to_string(),
+        local_dev_name: "Test User".to_string(),
+    });
+    
+    // Create router with MCP client
+    let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await
+        .expect("Router should be created successfully");
+    
+    // Test GET /auth/login -> should return 200 OK with login page
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/login")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let content_type = response.headers().get("content-type")
+        .expect("Should have content-type header")
+        .to_str()
+        .expect("Content-type should be valid string");
+    
+    assert!(content_type.starts_with("text/html"), 
+            "Content-type should be text/html, got: {}", content_type);
+    
+    println!("✅ Auth login page test passed: GET /auth/login -> 200 OK (text/html)");
 }

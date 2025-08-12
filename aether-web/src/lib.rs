@@ -359,7 +359,7 @@ where
 
 /// Redirect to login page
 async fn login_redirect() -> Redirect {
-    Redirect::to("/web/auth/login")
+    Redirect::to("/auth/login")
 }
 
 /// Health check endpoint
