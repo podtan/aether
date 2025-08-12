@@ -17,7 +17,7 @@
                         {{ u.email }} ({{ u.role }})
                     </p>
                 </div>
-                <form action="/web/auth/logout" method="post">
+                <form action="{{base_path}}/auth/logout" method="post">
                     <button type="submit" 
                             class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
                         <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -45,7 +45,7 @@
             <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">
                 Upload OpenAPI Specification
             </h3>
-            <form action="/web/upload" method="post" enctype="multipart/form-data" class="space-y-4">
+            <form action="{{base_path}}/upload" method="post" enctype="multipart/form-data" class="space-y-4">
                 <div>
                     <label for="api_name" class="block text-sm font-medium text-gray-700">API Name</label>
                     <input type="text" 
@@ -89,7 +89,7 @@
                 Quick Actions
             </h3>
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <a href="/web/apis" 
+                <a href="{{base_path}}/apis" 
                    class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
                     <div class="flex-shrink-0">
                         <div class="h-10 w-10 rounded-lg bg-primary flex items-center justify-center">
@@ -105,7 +105,7 @@
                     </div>
                 </a>
 
-                <a href="/web/health" 
+                <a href="{{base_path}}/health" 
                    class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm flex items-center space-x-3 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
                     <div class="flex-shrink-0">
                         <div class="h-10 w-10 rounded-lg bg-green-500 flex items-center justify-center">

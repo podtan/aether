@@ -90,10 +90,7 @@ async fn test_login_template_rendering() {
     use askama::Template;
     
     // Test dev mode template
-    let dev_template = crate::LoginTemplate { 
-        is_dev_mode: true,
-        error: None 
-    };
+    let dev_template = crate::LoginTemplate::new_standalone(true, None);
     let rendered = dev_template.render();
     assert!(rendered.is_ok(), "Dev mode login template should render");
     let html = rendered.unwrap();
@@ -101,10 +98,7 @@ async fn test_login_template_rendering() {
     assert!(html.contains("Development Login"), "Should show dev login button");
     
     // Test non-dev mode template  
-    let prod_template = crate::LoginTemplate { 
-        is_dev_mode: false,
-        error: None 
-    };
+    let prod_template = crate::LoginTemplate::new_standalone(false, None);
     let rendered = prod_template.render();
     assert!(rendered.is_ok(), "Production login template should render");
     let html = rendered.unwrap();
@@ -119,9 +113,7 @@ async fn test_login_template_rendering() {
 async fn test_home_template_rendering() {
     use askama::Template;
     
-    let template = crate::HomeTemplate { 
-        user: None 
-    };
+    let template = crate::HomeTemplate::new_standalone(None);
     let rendered = template.render();
     assert!(rendered.is_ok(), "Home template should render");
     let html = rendered.unwrap();
@@ -158,10 +150,7 @@ async fn test_apis_template_with_runtime_apis() {
         updated_at: chrono::Utc::now(),
     });
     
-    let template = crate::ApiListTemplate {
-        configs,
-        user: None,
-    };
+    let template = crate::ApiListTemplate::new_standalone(configs, None);
     
     let rendered = template.render();
     assert!(rendered.is_ok(), "API list template should render");
@@ -173,6 +162,45 @@ async fn test_apis_template_with_runtime_apis() {
     assert!(html.contains("https://api.example.com"), "Should contain base URL for uploaded API");
     
     println!("✅ API list template renders correctly with both uploaded and runtime APIs");
+}
+
+#[tokio::test]
+async fn test_template_paths_are_standalone() {
+    use askama::Template;
+    
+    // Test that all templates use standalone paths (no /web prefix)
+    let home_template = crate::HomeTemplate::new_standalone(None);
+    let home_html = home_template.render().unwrap();
+    
+    // Should contain action="/upload" not "/web/upload"
+    assert!(home_html.contains(r#"action="/upload""#), "Home template should have action='/upload'");
+    assert!(!home_html.contains(r#"action="/web/upload""#), "Home template should not have /web/upload");
+    
+    // Should contain href="/apis" not "/web/apis"
+    assert!(home_html.contains(r#"href="/apis""#), "Home template should have href='/apis'");
+    assert!(!home_html.contains(r#"href="/web/apis""#), "Home template should not have /web/apis");
+    
+    // Test upload result template
+    let upload_template = crate::UploadResultTemplate::new_standalone(
+        true, 
+        "Test message".to_string(), 
+        None
+    );
+    let upload_html = upload_template.render().unwrap();
+    
+    // Should contain href="/" not "/web/"
+    assert!(upload_html.contains(r#"href="/""#), "Upload result should have href='/'");
+    assert!(!upload_html.contains(r#"href="/web/""#), "Upload result should not have /web/");
+    
+    // Test API list template
+    let api_template = crate::ApiListTemplate::new_standalone(vec![], None);
+    let api_html = api_template.render().unwrap();
+    
+    // Should contain href="/" not "/web/"
+    assert!(api_html.contains(r#"href="/""#), "API list should have href='/'");
+    assert!(!api_html.contains(r#"href="/web/""#), "API list should not have /web/");
+    
+    println!("✅ All templates use standalone paths (no /web prefix)");
 }
 
 #[tokio::test]
