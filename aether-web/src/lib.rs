@@ -2,9 +2,9 @@
 
 use askama::Template;
 use axum::{
-    extract::{Multipart, State},
+    extract::{Multipart, State, Query},
     http::StatusCode,
-    middleware,
+    middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -23,6 +23,9 @@ use aether_config::generator;
 mod auth;
 pub use auth::{AuthState, UserInfo, UserRole, get_current_user};
 
+mod mcp_client;
+pub use mcp_client::McpClient;
+
 #[cfg(test)]
 mod tests;
 
@@ -33,12 +36,35 @@ pub struct AppState {
     pub auth: AuthState,
 }
 
+/// Application state with MCP client for standalone web service
+#[derive(Clone)]
+pub struct AppStateWithClient {
+    pub web: WebStateWithClient,
+    pub auth: AuthState,
+}
+
 /// Configuration management state
 #[derive(Clone)]
 pub struct WebState {
     pub configs: Arc<RwLock<HashMap<String, ConfigInfo>>>,
     /// Optional callback to get runtime APIs list
     pub runtime_apis_callback: Option<Arc<dyn Fn() -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync>>,
+}
+
+/// Configuration management state with MCP client
+#[derive(Clone)]
+pub struct WebStateWithClient {
+    pub configs: Arc<RwLock<HashMap<String, ConfigInfo>>>,
+    pub mcp_client: McpClient,
+}
+
+impl WebStateWithClient {
+    pub fn new(mcp_url: &str) -> Self {
+        Self {
+            configs: Arc::new(RwLock::new(HashMap::new())),
+            mcp_client: McpClient::new(mcp_url),
+        }
+    }
 }
 
 /// Information about a managed configuration
@@ -55,6 +81,18 @@ pub struct ConfigInfo {
 impl AppState {
     pub async fn new(config: &AetherConfig) -> anyhow::Result<Self> {
         let web = WebState::new();
+        let auth = AuthState::new(
+            config.oidc.as_ref(), 
+            config.dev.clone()
+        ).await?;
+        
+        Ok(Self { web, auth })
+    }
+}
+
+impl AppStateWithClient {
+    pub async fn new(config: &AetherConfig, mcp_url: &str) -> anyhow::Result<Self> {
+        let web = WebStateWithClient::new(mcp_url);
         let auth = AuthState::new(
             config.oidc.as_ref(), 
             config.dev.clone()
@@ -154,9 +192,10 @@ impl IntoResponse for UploadResultTemplate {
     }
 }
 
-/// Create the web UI router with authentication
-pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
-    let app_state = AppState::new(config).await?;
+/// Create the web UI router with authentication and MCP client integration
+pub async fn create_router_with_mcp_client(config: &AetherConfig, mcp_url: &str) -> anyhow::Result<Router> {
+    let app_state = AppStateWithClient::new(config, mcp_url).await?;
+    
     // Session configuration
     let session_config = config.session.as_ref().ok_or_else(|| {
         anyhow::anyhow!("Session configuration is required")
@@ -168,26 +207,24 @@ pub async fn create_router(config: &AetherConfig) -> anyhow::Result<Router> {
         .with_http_only(true)
         .with_name(session_config.cookie_name.clone());
 
-    // Protected routes (require authentication)
-    let protected_routes = Router::new()
-        .route("/", get(home_page))
-        .route("/ui", get(home_page))  // Also accessible as /ui
-        .route("/upload", post(handle_upload_openapi))
-        .route("/apis", get(handle_list_apis))
-        .layer(middleware::from_fn(auth::auth_middleware));
-
     let router = Router::new()
         // Public routes (no authentication required)
         .route("/login", get(login_redirect))
         .route("/health", get(health_check))
         
         // Auth routes (always public)
-        .nest("/auth", auth::create_auth_router())
+        .route("/auth/login", get(auth_login_with_client))
+        .route("/auth/callback", get(auth_callback_with_client))
+        .route("/auth/logout", post(auth_logout_with_client))
         
-        // Protected routes
-        .merge(protected_routes)
+        // Protected routes (require authentication)
+        .route("/", get(home_page_with_client))
+        .route("/ui", get(home_page_with_client))  // Also accessible as /ui
+        .route("/upload", post(handle_upload_openapi_with_client))
+        .route("/apis", get(handle_list_apis_with_client))
         
         .with_state(app_state)
+        .layer(middleware::from_fn(auth_middleware_with_client))
         .layer(session_layer);
 
     Ok(router)
@@ -655,4 +692,216 @@ where
             }
         }
     }
+}
+/// Handle OpenAPI file upload using MCP client
+async fn handle_upload_openapi_with_client(
+    State(app_state): State<AppStateWithClient>,
+    session: Session,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let user = auth::get_current_user(session).await;
+    let mut api_name = String::new();
+    let mut base_url = String::new();
+    let mut openapi_content = String::new();
+
+    // Process multipart form data
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or_default();
+        
+        match name {
+            "api_name" => {
+                match field.text().await {
+                    Ok(text) => api_name = text,
+                    Err(_) => return UploadResultTemplate {
+                        success: false,
+                        message: "Failed to read API name".to_string(),
+                        user,
+                    },
+                }
+            }
+            "base_url" => {
+                match field.text().await {
+                    Ok(text) => base_url = text,
+                    Err(_) => return UploadResultTemplate {
+                        success: false,
+                        message: "Failed to read base URL".to_string(),
+                        user,
+                    },
+                }
+            }
+            "openapi_file" => {
+                match field.text().await {
+                    Ok(text) => openapi_content = text,
+                    Err(_) => return UploadResultTemplate {
+                        success: false,
+                        message: "Failed to read OpenAPI file".to_string(),
+                        user,
+                    },
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
+        return UploadResultTemplate {
+            success: false,
+            message: "Missing required fields".to_string(),
+            user,
+        };
+    }
+
+    // Call MCP admin API to upload the configuration
+    match app_state.web.mcp_client.upload_openapi(&api_name, &base_url, &openapi_content).await {
+        Ok(response) => {
+            if response.success {
+                // Also update local web state for UI
+                let config_info = ConfigInfo {
+                    api_name: api_name.clone(),
+                    openapi_content,
+                    config_content: "".to_string(), // We don't get the config back from MCP
+                    base_url,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                };
+
+                app_state.web.configs.write().await.insert(api_name.clone(), config_info);
+                info!("Successfully uploaded config for API: {}", api_name);
+
+                UploadResultTemplate {
+                    success: true,
+                    message: response.message.unwrap_or_else(|| format!("Successfully configured API: {}", api_name)),
+                    user,
+                }
+            } else {
+                UploadResultTemplate {
+                    success: false,
+                    message: response.error.unwrap_or_else(|| "Upload failed".to_string()),
+                    user,
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to upload via MCP client: {}", e);
+            UploadResultTemplate {
+                success: false,
+                message: format!("Failed to configure API: {}", e),
+                user,
+            }
+        }
+    }
+}
+
+/// List all configured APIs using MCP client
+async fn handle_list_apis_with_client(
+    State(app_state): State<AppStateWithClient>,
+    session: Session,
+) -> impl IntoResponse {
+    let user = auth::get_current_user(session).await;
+    let mut configs_vec: Vec<ConfigInfo> = Vec::new();
+    
+    // Get APIs from MCP service
+    match app_state.web.mcp_client.list_apis().await {
+        Ok(runtime_apis) => {
+            info!("Found {} APIs from MCP service", runtime_apis.len());
+            
+            // Load local web state configs
+            let web_configs = app_state.web.configs.read().await;
+            
+            // Merge runtime APIs with local state
+            for api_name in runtime_apis {
+                if let Some(local_config) = web_configs.get(&api_name) {
+                    // Use local config if available
+                    configs_vec.push(local_config.clone());
+                } else {
+                    // Create minimal config for runtime API
+                    let config_info = ConfigInfo {
+                        api_name: api_name.clone(),
+                        openapi_content: "".to_string(),
+                        config_content: "".to_string(),
+                        base_url: "".to_string(),
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                    };
+                    configs_vec.push(config_info);
+                }
+            }
+            
+            info!("Total APIs to display: {}", configs_vec.len());
+        }
+        Err(e) => {
+            error!("Failed to get APIs from MCP service: {}", e);
+            // Fall back to local state only
+            let web_configs = app_state.web.configs.read().await;
+            configs_vec = web_configs.values().cloned().collect();
+        }
+    }
+    
+    ApiListTemplate {
+        configs: configs_vec,
+        user,
+    }
+}
+/// Main dashboard page for client-based app
+async fn home_page_with_client(session: Session) -> HomeTemplate {
+    let user = auth::get_current_user(session).await;
+    HomeTemplate { user }
+}
+
+/// Auth middleware for client-based app
+async fn auth_middleware_with_client(
+    session: Session,
+    request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, Response> {
+    let path = request.uri().path();
+    
+    // Allow public routes
+    if path.starts_with("/auth/") || path == "/login" || path == "/health" {
+        return Ok(next.run(request).await);
+    }
+    
+    // Check if user is authenticated
+    if let Some(_user_info) = session.get::<auth::UserInfo>("user_info").await.unwrap_or(None) {
+        Ok(next.run(request).await)
+    } else {
+        Err(Redirect::to("/login").into_response())
+    }
+}
+
+/// Login handler for client-based app
+async fn auth_login_with_client(
+    State(app_state): State<AppStateWithClient>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    crate::LoginTemplate {
+        is_dev_mode: app_state.auth.is_dev_mode(),
+        error: params.get("error").cloned(),
+    }
+}
+
+/// Callback handler for client-based app  
+async fn auth_callback_with_client(
+    State(_app_state): State<AppStateWithClient>,
+    _session: Session,
+    Query(_callback): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    // Handle the OIDC callback - for now, redirect to login with error
+    // Full implementation would need OIDC flow
+    Redirect::to("/login?error=callback_not_implemented")
+}
+
+/// Logout handler for client-based app
+async fn auth_logout_with_client(
+    session: Session,
+) -> impl IntoResponse {
+    // Remove user from session
+    if let Err(e) = session.remove::<auth::UserInfo>("user_info").await {
+        tracing::warn!("Failed to remove user from session during logout: {}", e);
+    }
+    
+    // Clear session - this method doesn't return a Result
+    session.clear().await;
+    
+    Redirect::to("/login")
 }
