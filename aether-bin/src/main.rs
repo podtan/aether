@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("port")
                 .value_name("PORT")
                 .help("HTTP server port")
-                .default_value("8000")
+                .default_value("9000")
         )
         .arg(
             Arg::new("host")
@@ -146,49 +146,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             });
         
-        let bind_addr: SocketAddr = format!("{}:{}", host, port)
-            .parse()
-            .unwrap_or_else(|_| {
-                error!("Invalid host:port combination");
-                std::process::exit(1);
-            });
-        
         info!("Starting Multi-Config MCP server on {}:{}", host, port);
         
-        // Check if we have a web config file for authentication
-        let web_config_path = PathBuf::from("config.toml");
-        if web_config_path.exists() {
-            info!("Found web configuration file, starting combined multi-config + web server");
-            
-            // Load web authentication configuration
-            let web_config = match AetherConfig::load_toml_from_file(&web_config_path).await {
-                Ok(config) => config,
-                Err(e) => {
-                    error!("Failed to load web configuration: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            
-            // Start combined multi-config + web server
-            if let Err(e) = start_multi_config_web_server(configs_dir, web_config, bind_addr).await {
-                error!("Combined multi-config + web server error: {}", e);
+        // Start pure multi-config server (no web integration)
+        let multi_server = match MultiConfigServer::new(configs_dir).await {
+            Ok(server) => server,
+            Err(e) => {
+                error!("Failed to create multi-config server: {}", e);
                 std::process::exit(1);
             }
-        } else {
-            // Start pure multi-config server (existing behavior)
-            let multi_server = match MultiConfigServer::new(configs_dir).await {
-                Ok(server) => server,
-                Err(e) => {
-                    error!("Failed to create multi-config server: {}", e);
-                    std::process::exit(1);
-                }
-            };
-            
-            let transport = MultiConfigTransport::new(multi_server, port);
-            if let Err(e) = transport.start().await {
-                error!("Multi-config server error: {}", e);
-                std::process::exit(1);
-            }
+        };
+        
+        let transport = MultiConfigTransport::new(multi_server, port);
+        if let Err(e) = transport.start().await {
+            error!("Multi-config server error: {}", e);
+            std::process::exit(1);
         }
     } else {
         // Single-config mode (existing behavior)
@@ -235,47 +207,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             info!("Starting MCP server with HTTP transport on {}", bind_addr);
             
-            // Check if web authentication is configured
-            if config.has_web_authentication() {
-                info!("Web authentication detected, starting combined MCP + Web server");
-                
-                // Start the combined MCP + Web server
-                if let Err(e) = server::start_combined_server(config, bind_addr).await {
-                    error!("Combined server error: {}", e);
-                    std::process::exit(1);
-                }
-            } else {
-                // Start the MCP SSE server only
-                if let Err(e) = server::start_sse_server(config, bind_addr).await {
-                    error!("Server error: {}", e);
-                    std::process::exit(1);
-                }
+            // Start the MCP SSE server only (no web integration)
+            if let Err(e) = server::start_sse_server(config, bind_addr).await {
+                error!("Server error: {}", e);
+                std::process::exit(1);
             }
         }
     }
     
     info!("Aether stopped");
-    Ok(())
-}
-
-/// Start combined multi-config MCP server with web authentication
-async fn start_multi_config_web_server(
-    configs_dir: &str,
-    web_config: AetherConfig,
-    bind_addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Starting combined multi-config MCP + Web Auth server on {}", bind_addr);
-
-    // Create multi-config server for MCP APIs
-    let multi_server = MultiConfigServer::new(configs_dir).await?;
-
-    // Create multi-config transport and combine with web routes
-    let transport = MultiConfigTransport::new(multi_server, bind_addr.port());
-    let app = transport.create_app_with_web_routes(&web_config).await?;
-
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    axum::serve(listener, app).await?;
-
     Ok(())
 }
 
