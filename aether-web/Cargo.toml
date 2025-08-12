@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "Web UI for Aether config management"
 
+[[bin]]
+name = "aether-web"
+path = "src/main.rs"
+
 [dependencies]
 axum = { workspace = true, features = ["multipart"] }
 serde = { workspace = true }
@@ -16,12 +20,14 @@ tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 askama = "0.12"
 aether-config = { path = "../aether-config" }
 aether-core = { path = "../aether-core" }
+clap = { workspace = true }
 
 # OIDC authentication dependencies
 openid = "0.10"
@@ -30,6 +36,6 @@ uuid = { version = "1.0", features = ["v4"] }
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { workspace = true }
 tower-sessions = "0.14"
 toml = "0.8"
