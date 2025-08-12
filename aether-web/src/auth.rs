@@ -133,8 +133,8 @@ impl AuthState {
 /// OAuth2 callback parameters
 #[derive(Deserialize)]
 pub struct AuthCallback {
-    code: String,
-    state: String,
+    pub code: String,
+    pub state: String,
 }
 
 /// Authentication middleware to protect routes
@@ -291,7 +291,7 @@ async fn oidc_callback(
 }
 
 /// Exchange authorization code for tokens using PKCE
-async fn exchange_token_with_pkce(
+pub async fn exchange_token_with_pkce(
     oidc_client: &DiscoveredClient,
     code: &str,
     code_verifier: &str,
