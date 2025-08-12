@@ -248,3 +248,50 @@ async fn test_login_redirect_no_loop() {
     
     println!("✅ Login redirect test passed: GET /login -> 302 to /auth/login");
 }
+
+#[tokio::test]
+async fn test_auth_login_returns_page() {
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // For oneshot
+    
+    // Create minimal config for testing
+    let mut config = AetherConfig::default();
+    config.session = Some(aether_config::SessionConfig {
+        secret_key: "test_secret_for_auth_test".to_string(),
+        cookie_name: "test_session".to_string(),
+        max_age: 3600,
+    });
+    config.dev = Some(aether_config::DevConfig {
+        local_dev_mode: true,
+        local_dev_email: "test@example.com".to_string(),
+        local_dev_role: "user".to_string(),
+        local_dev_name: "Test User".to_string(),
+    });
+    
+    // Create router with MCP client
+    let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await
+        .expect("Router should be created successfully");
+    
+    // Test GET /auth/login -> should return 200 OK with login page
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/login")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let content_type = response.headers().get("content-type")
+        .expect("Should have content-type header")
+        .to_str()
+        .expect("Content-type should be valid string");
+    
+    assert!(content_type.starts_with("text/html"), 
+            "Content-type should be text/html, got: {}", content_type);
+    
+    println!("✅ Auth login page test passed: GET /auth/login -> 200 OK (text/html)");
+}
