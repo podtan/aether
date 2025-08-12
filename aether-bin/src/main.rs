@@ -146,7 +146,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             });
         
-        info!("Starting Multi-Config MCP server on {}:{}", host, port);
+        let bind_addr: SocketAddr = format!("{}:{}", host, port)
+            .parse()
+            .unwrap_or_else(|_| {
+                error!("Invalid host:port combination");
+                std::process::exit(1);
+            });
+        
+        info!("Starting Multi-Config MCP server on {}", bind_addr);
         
         // Start pure multi-config server (no web integration)
         let multi_server = match MultiConfigServer::new(configs_dir).await {
@@ -157,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         
-        let transport = MultiConfigTransport::new(multi_server, port);
+        let transport = MultiConfigTransport::new(multi_server, bind_addr);
         if let Err(e) = transport.start().await {
             error!("Multi-config server error: {}", e);
             std::process::exit(1);

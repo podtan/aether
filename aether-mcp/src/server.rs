@@ -19,7 +19,7 @@ pub async fn start_sse_server(config: AetherConfig, bind_addr: SocketAddr) -> an
         .map_err(|e| anyhow::anyhow!("Failed to create MCP server: {}", e))?;
 
     // Create and start the HTTP SSE transport
-    let transport = HttpSseTransport::new(server, bind_addr.port());
+    let transport = HttpSseTransport::new(server, bind_addr);
     transport.start().await?;
 
     Ok(())
