@@ -91,10 +91,10 @@ jobs:
           
           [Service]
           Type=simple
-          ExecStart=/opt/aether/mcp/bin/aether --multi-config --configs-dir /opt/aether/mcp/configs --host 0.0.0.0 --port 9000
+          ExecStart=/opt/aether/mcp/bin/aether --multi-config --configs-dir /opt/aether/mcp/configs --host 127.0.0.1 --port 8000
           WorkingDirectory=/opt/aether/mcp
           Restart=on-failure
-          User=aether
+          User=pdt
           Environment=RUST_LOG=info
           
           [Install]
@@ -113,10 +113,10 @@ jobs:
           
           [Service]
           Type=simple
-          ExecStart=/opt/aether/web/bin/aether-web --host 0.0.0.0 --port 9001
+          ExecStart=/opt/aether/web/bin/aether-web --host 127.0.0.1 --port 9001
           WorkingDirectory=/opt/aether/web
           Restart=on-failure
-          User=aether
+          User=pdt
           Environment=RUST_LOG=info
           
           [Install]
