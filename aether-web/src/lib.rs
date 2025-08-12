@@ -23,7 +23,7 @@ use aether_config::AetherConfig;
 use aether_config::generator;
 
 mod auth;
-pub use auth::{AuthState, UserInfo, UserRole, get_current_user};
+pub use auth::{AuthState, UserInfo, UserRole, get_current_user, AuthCallback, exchange_token_with_pkce};
 
 mod mcp_client;
 pub use mcp_client::McpClient;
@@ -886,13 +886,69 @@ async fn auth_login_with_client(
 
 /// Callback handler for client-based app  
 async fn auth_callback_with_client(
-    State(_app_state): State<AppStateWithClient>,
-    _session: Session,
-    Query(_callback): Query<std::collections::HashMap<String, String>>,
+    State(app_state): State<AppStateWithClient>,
+    session: Session,
+    Query(callback): Query<AuthCallback>,
 ) -> impl IntoResponse {
-    // Handle the OIDC callback - for now, redirect to login with error
-    // Full implementation would need OIDC flow
-    Redirect::to("/login?error=callback_not_implemented")
+    if let Some(oidc_client) = &app_state.auth.oidc_client {
+        // Verify the state parameter
+        match session.get::<String>("oauth_state").await {
+            Ok(Some(stored_state)) if stored_state == callback.state => {
+                // State is valid, get the PKCE verifier
+                match session.get::<String>("pkce_verifier").await {
+                    Ok(Some(code_verifier)) => {
+                        tracing::debug!("OAuth state verified, exchanging code for token with PKCE");
+                        
+                        // Perform token exchange with PKCE
+                        match exchange_token_with_pkce(oidc_client, &callback.code, &code_verifier).await {
+                            Ok(user_info) => {
+                                // Store user info in session
+                                if let Err(e) = session.insert("user_info", &user_info).await {
+                                    tracing::warn!("Failed to store user info in session: {}", e);
+                                    return Redirect::to("/login?error=session_error");
+                                }
+                                
+                                // Clean up session data
+                                let _ = session.remove::<String>("oauth_state").await;
+                                let _ = session.remove::<String>("pkce_verifier").await;
+                                
+                                tracing::info!("User {} logged in successfully", user_info.email);
+                                return Redirect::to("/ui");
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to exchange code for token: {}", e);
+                                return Redirect::to("/login?error=token_exchange_failed");
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::warn!("No PKCE verifier found in session");
+                        return Redirect::to("/login?error=no_pkce_verifier");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to get PKCE verifier from session: {}", e);
+                        return Redirect::to("/login?error=session_error");
+                    }
+                }
+            }
+            Ok(Some(_)) => {
+                tracing::warn!("OAuth state mismatch");
+                return Redirect::to("/login?error=state_mismatch");
+            }
+            Ok(None) => {
+                tracing::warn!("No OAuth state found in session");
+                return Redirect::to("/login?error=no_state");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get OAuth state from session: {}", e);
+                return Redirect::to("/login?error=session_error");
+            }
+        }
+    }
+    
+    // Fallback error - OIDC client not available
+    tracing::warn!("OIDC client not available for callback");
+    Redirect::to("/login?error=oidc_not_configured")
 }
 
 /// Logout handler for client-based app

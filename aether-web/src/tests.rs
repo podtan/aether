@@ -295,3 +295,91 @@ async fn test_auth_login_returns_page() {
     
     println!("✅ Auth login page test passed: GET /auth/login -> 200 OK (text/html)");
 }
+
+#[tokio::test]
+async fn test_oidc_callback_error_scenarios() {
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // For oneshot
+    
+    // Create minimal config for testing with OIDC disabled (dev mode)
+    let mut config = AetherConfig::default();
+    config.session = Some(aether_config::SessionConfig {
+        secret_key: "test_secret_for_callback_test".to_string(),
+        cookie_name: "test_session".to_string(),
+        max_age: 3600,
+    });
+    config.dev = Some(aether_config::DevConfig {
+        local_dev_mode: true, // This disables OIDC client creation
+        local_dev_email: "test@example.com".to_string(),
+        local_dev_role: "user".to_string(),
+        local_dev_name: "Test User".to_string(),
+    });
+    
+    // Create router with MCP client
+    let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await
+        .expect("Router should be created successfully");
+    
+    // Test /auth/callback without OIDC client (dev mode) -> should redirect with error
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/callback?code=test_code&state=test_state")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    
+    let location = response.headers().get("location")
+        .expect("Should have location header")
+        .to_str()
+        .expect("Location should be valid string");
+    
+    assert_eq!(location, "/login?error=oidc_not_configured", 
+               "OIDC callback without client should redirect with oidc_not_configured error");
+    
+    println!("✅ OIDC callback error test passed: no OIDC client -> /login?error=oidc_not_configured");
+}
+
+#[tokio::test]
+async fn test_oidc_callback_missing_parameters() {
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt; // For oneshot
+    
+    // Create minimal config for testing with OIDC disabled (dev mode)
+    let mut config = AetherConfig::default();
+    config.session = Some(aether_config::SessionConfig {
+        secret_key: "test_secret_for_missing_params_test".to_string(),
+        cookie_name: "test_session".to_string(),
+        max_age: 3600,
+    });
+    config.dev = Some(aether_config::DevConfig {
+        local_dev_mode: true,
+        local_dev_email: "test@example.com".to_string(),
+        local_dev_role: "user".to_string(),
+        local_dev_name: "Test User".to_string(),
+    });
+    
+    // Create router with MCP client
+    let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await
+        .expect("Router should be created successfully");
+    
+    // Test /auth/callback with missing code parameter -> should return 400 Bad Request
+    // Note: This actually tests Axum's Query extraction which will fail with missing required fields
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/auth/callback?state=test_state") // Missing code parameter
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    
+    // Axum will return 400 Bad Request when Query<AuthCallback> fails to extract required fields
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    
+    println!("✅ OIDC callback missing parameters test passed: missing code -> 400 Bad Request");
+}
