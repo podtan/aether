@@ -25,6 +25,8 @@ pub struct AetherConfig {
     pub session: Option<SessionConfig>,
     #[serde(default)]
     pub dev: Option<DevConfig>,
+    #[serde(default)]
+    pub mcp_auth: Option<McpAuthConfig>,
 }
 
 /// Server configuration
@@ -115,6 +117,55 @@ fn default_dev_role() -> String {
 
 fn default_dev_name() -> String {
     "Local Developer".to_string()
+}
+
+/// MCP authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpAuthConfig {
+    /// Enable OAuth2.1 protection for MCP endpoints
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Require authentication (reject unauthenticated requests)
+    #[serde(default)]
+    pub require_auth: bool,
+
+    /// Keep health endpoint public
+    #[serde(default = "default_true")]
+    pub public_health: bool,
+
+    /// Override OIDC issuer URL (optional, defaults to [oidc].issuer_url)
+    pub issuer_url: Option<String>,
+
+    /// Expected audience claim (optional, defaults to http://HOST:PORT)
+    pub audience: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl McpAuthConfig {
+    /// Validate configuration at startup
+    pub fn validate(&self, oidc_config: Option<&OidcConfig>) -> Result<()> {
+        if self.enabled {
+            // If auth enabled, OIDC config must be present
+            if oidc_config.is_none() {
+                return Err(AetherError::Configuration(
+                    "[mcp_auth] enabled=true requires [oidc] configuration. \
+                     See docs/oauth2/CLIENTS.md for setup instructions.".to_string()
+                ));
+            }
+        }
+
+        if self.require_auth && !self.enabled {
+            return Err(AetherError::Configuration(
+                "[mcp_auth] require_auth=true requires enabled=true".to_string()
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 impl ApiAuthentication {
@@ -227,6 +278,7 @@ impl AetherConfig {
             oidc: None,
             session: None,
             dev: None,
+            mcp_auth: None,
         }
     }
 

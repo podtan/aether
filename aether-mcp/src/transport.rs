@@ -61,20 +61,49 @@ impl HttpSseTransport {
     }
 
     /// Start the HTTP server
-    pub async fn start(self) -> anyhow::Result<()> {
+    pub async fn start(
+        self,
+        auth_config: Option<aether_config::McpAuthConfig>,
+        oidc_config: Option<&aether_config::OidcConfig>,
+    ) -> anyhow::Result<()> {
         let app_state = AppState {
             server: self.server,
             sse_state: self.sse_state,
         };
 
-        let app = Router::new()
+        // Create auth middleware state if configured
+        let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
+            Some(
+                crate::middleware::AuthMiddlewareState::new(
+                    mcp_auth_config,
+                    oidc_config,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        let mut app = Router::new()
             .route("/message", post(handle_message))
-            .route("/messages", post(handle_message))  // Support both /message and /messages
-            .route("/messages/", post(handle_message))  // Support /messages/ (with trailing slash)
+            .route("/messages", post(handle_message)) // Support both /message and /messages
+            .route("/messages/", post(handle_message)) // Support /messages/ (with trailing slash)
             .route("/sse", get(handle_sse))
-            .route("/sse", post(handle_sse_message))  // Handle MCP messages over SSE
-            .route("/health", get(health_check))
-            .route("/api/generate-config", post(handle_generate_config))  // New config generation API
+            .route("/sse", post(handle_sse_message)) // Handle MCP messages over SSE
+            .route("/api/generate-config", post(handle_generate_config)); // New config generation API
+
+        // Apply auth middleware to protected routes
+        if let Some(auth_state) = auth_middleware_state {
+            app = app.route_layer(axum::middleware::from_fn_with_state(
+                auth_state.clone(),
+                crate::middleware::mcp_auth_middleware,
+            ));
+        }
+
+        // Health endpoint added AFTER auth middleware (remains public)
+        app = app.route("/health", get(health_check));
+
+        let app = app
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -84,9 +113,11 @@ impl HttpSseTransport {
 
         info!("Starting MCP HTTP SSE server on {}", self.bind_addr);
 
-        let listener = tokio::net::TcpListener::bind(self.bind_addr).await
+        let listener = tokio::net::TcpListener::bind(self.bind_addr)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", self.bind_addr, e))?;
-        axum::serve(listener, app).await
+        axum::serve(listener, app)
+            .await
             .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
 
         Ok(())
@@ -523,24 +554,39 @@ impl MultiConfigTransport {
     }
 
     /// Start the HTTP server with multi-config support
-    pub async fn start(self) -> anyhow::Result<()> {
+    pub async fn start(
+        self,
+        auth_config: Option<aether_config::McpAuthConfig>,
+        oidc_config: Option<&aether_config::OidcConfig>,
+    ) -> anyhow::Result<()> {
         let multi_state = MultiAppState {
             multi_server: self.multi_server,
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
         };
 
-        let app = Router::new()
+        // Create auth middleware state if configured
+        let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
+            Some(
+                crate::middleware::AuthMiddlewareState::new(
+                    mcp_auth_config,
+                    oidc_config,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        let mut mcp_router = Router::new()
             // Legacy single-API endpoints (for backwards compatibility)
             .route("/message", post(handle_single_message))
             .route("/messages", post(handle_single_message))
             .route("/sse", get(handle_single_sse))
-
-            // Multi-API endpoints  
+            // Multi-API endpoints
             .route("/{api_name}/message", post(handle_multi_message))
             .route("/{api_name}/messages", post(handle_multi_message))
             .route("/{api_name}/sse", get(handle_multi_sse))
-
             // API management endpoints
             .route("/api/generate-config", post(handle_generate_config))
             .route("/api/upload-openapi", post(handle_upload_openapi))
@@ -548,12 +594,21 @@ impl MultiConfigTransport {
             .route("/api/{api_name}/config", get(handle_get_config))
             .route("/api/{api_name}/config", post(handle_update_config))
             .route("/api/{api_name}/delete", post(handle_delete_api))
+            // Stats
+            .route("/stats", get(handle_all_stats));
 
-            // Health and stats
-            .route("/health", get(handle_multi_health))
-            .route("/stats", get(handle_all_stats))
+        // Apply auth middleware to protected routes
+        if let Some(auth_state) = auth_middleware_state {
+            mcp_router = mcp_router.route_layer(axum::middleware::from_fn_with_state(
+                auth_state,
+                crate::middleware::mcp_auth_middleware,
+            ));
+        }
 
-            
+        // Health endpoint added AFTER auth middleware (remains public)
+        mcp_router = mcp_router.route("/health", get(handle_multi_health));
+
+        let app = mcp_router
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -563,9 +618,11 @@ impl MultiConfigTransport {
 
         info!("Starting Multi-Config MCP HTTP server on {}", self.bind_addr);
 
-        let listener = tokio::net::TcpListener::bind(self.bind_addr).await
+        let listener = tokio::net::TcpListener::bind(self.bind_addr)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to bind to {}: {}", self.bind_addr, e))?;
-        axum::serve(listener, app).await
+        axum::serve(listener, app)
+            .await
             .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
 
         Ok(())

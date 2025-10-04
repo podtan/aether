@@ -163,9 +163,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         };
-        
+
         let transport = MultiConfigTransport::new(multi_server, bind_addr);
-        if let Err(e) = transport.start().await {
+        // Multi-config mode doesn't support MCP auth yet (requires per-API config design)
+        if let Err(e) = transport.start(None, None).await {
             error!("Multi-config server error: {}", e);
             std::process::exit(1);
         }
@@ -184,9 +185,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         };
-        
+
         info!("Configuration loaded from: {:?}", config_path);
-        
+
+        // Validate MCP auth configuration
+        if let Some(mcp_auth) = &config.mcp_auth {
+            if let Err(e) = mcp_auth.validate(config.oidc.as_ref()) {
+                error!("MCP auth configuration validation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+
         if use_stdio {
             info!("Starting MCP server with stdio transport");
             

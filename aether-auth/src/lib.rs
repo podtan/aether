@@ -1,11 +1,16 @@
 //! Authentication handling for Aether
 
+pub mod oidc;
+
 use aether_core::{
     types::{AuthSpec, AuthType, Authorization, ApiKeyLocation},
     AetherError, Result,
 };
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use tracing::{debug, warn};
+
+// Re-export OIDC types for convenience
+pub use oidc::{OidcValidator, UserClaims};
 
 /// Authentication processor for applying auth to HTTP requests
 pub struct AuthProcessor;

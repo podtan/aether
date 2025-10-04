@@ -20,10 +20,12 @@ pub mod server;
 pub mod protocol;
 pub mod transport;
 pub mod multi_server;
+pub mod middleware;
 
-// Re-export core structures  
+// Re-export core structures
 pub use transport::{HttpSseTransport, StdioTransport, MultiConfigTransport};
 pub use multi_server::MultiConfigServer;
+pub use middleware::{AuthMiddlewareState, mcp_auth_middleware};
 
 /// Internal tool definition with operation and API context
 #[derive(Debug, Clone)]

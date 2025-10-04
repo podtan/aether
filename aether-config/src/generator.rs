@@ -79,6 +79,7 @@ pub async fn generate_config_from_openapi(
         oidc: None,
         session: None,
         dev: None,
+        mcp_auth: None,
     };
 
     info!("🎉 Successfully generated Aether configuration");

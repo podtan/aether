@@ -25,6 +25,24 @@ local_dev_email = "developer@example.com"
 local_dev_role = "user"
 local_dev_name = "Local Developer"
 
+# MCP Authentication Configuration
+# Protect MCP endpoints with OAuth2.1/OIDC authentication
+[mcp_auth]
+# Enable OAuth2.1 protection for MCP endpoints
+enabled = false              # Set to true to enable auth
+
+# Require authentication (reject unauthenticated requests)
+require_auth = false         # Set to true to reject unauthenticated requests
+
+# Keep /health endpoint public for monitoring
+public_health = true         # Keep /health endpoint public
+
+# Optional: Override OIDC issuer (defaults to [oidc].issuer_url)
+# issuer_url = "https://auth.example.com"
+
+# IMPORTANT: When enabled=true, you must also configure [oidc] section above
+# See docs/oauth2/CLIENTS.md for setup instructions
+
 # API configurations remain the same
 [apis]
 # Example API configuration
