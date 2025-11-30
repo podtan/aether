@@ -8,7 +8,7 @@ use aether_web::WebState;
 use axum::{
     extract::{Query, State, Path as AxumPath},
     http::StatusCode,
-    response::sse::{Event, Sse},
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
@@ -250,23 +250,9 @@ pub async fn handle_sse(
         error!("Failed to send endpoint event: {}", e);
     }
 
-    // Start a keep-alive ping task for this connection
-    let ping_tx = tx.clone();
-    let ping_session_id = connection_id.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            let ping_event = Event::default()
-                .event("ping")
-                .data("keep-alive");
-            
-            if ping_tx.send(ping_event).is_err() {
-                debug!("SSE connection {} closed, stopping ping task", ping_session_id);
-                break;
-            }
-        }
-    });
+    // Note: We use axum's built-in KeepAlive instead of manual ping events.
+    // Manual ping events with `event: ping\ndata: keep-alive` cause parsing errors
+    // in rmcp because it tries to parse the data as JSON-RPC.
 
     debug!("Yielding read and write streams");
 
@@ -284,7 +270,9 @@ pub async fn handle_sse(
         ("access-control-allow-headers", "*".to_string()),
     ];
     
-    (headers, Sse::new(stream))
+    // Use axum's built-in KeepAlive which sends SSE comments (`: keep-alive`)
+    // instead of data events that rmcp would try to parse as JSON
+    (headers, Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30))))
 }
 
 /// Handle config generation API
@@ -765,23 +753,9 @@ pub async fn handle_multi_sse(
         error!("Failed to send endpoint event: {}", e);
     }
 
-    // Start a keep-alive ping task for this connection (like single-config version)
-    let ping_tx = tx.clone();
-    let ping_session_key = session_key.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            let ping_event = Event::default()
-                .event("ping")
-                .data("keep-alive");
-            
-            if ping_tx.send(ping_event).is_err() {
-                debug!("SSE connection {} closed, stopping ping task", ping_session_key);
-                break;
-            }
-        }
-    });
+    // Note: We use axum's built-in KeepAlive instead of manual ping events.
+    // Manual ping events with `event: ping\ndata: keep-alive` cause parsing errors
+    // in rmcp because it tries to parse the data as JSON-RPC.
     
     // Create the stream
     let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
@@ -796,7 +770,9 @@ pub async fn handle_multi_sse(
     headers.insert("access-control-allow-origin", "*".parse().unwrap());
     headers.insert("access-control-allow-headers", "*".parse().unwrap());
     
-    Ok((headers, Sse::new(stream)))
+    // Use axum's built-in KeepAlive which sends SSE comments (`: keep-alive`)
+    // instead of data events that rmcp would try to parse as JSON
+    Ok((headers, Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30)))))
 }
 
 
