@@ -79,19 +79,20 @@ impl ApiClient {
         // Create request builder
         let mut request = self.client.request(method, &url);
         
-        // Separate form parameters from other parameters
+        // Separate form parameters, body parameters, and other parameters
         let mut form_params = Vec::new();
+        let mut body_params = Vec::new();
         let mut other_params = Vec::new();
         
         for param in &operation.parameters {
-            if param.param_type == "form" {
-                form_params.push(param);
-            } else {
-                other_params.push(param);
+            match param.param_type.as_str() {
+                "form" => form_params.push(param),
+                "body" => body_params.push(param),
+                _ => other_params.push(param),
             }
         }
         
-        // Apply non-form parameters first
+        // Apply non-form, non-body parameters first
         for param in other_params {
             if let Some(value) = parameters.get(&param.name) {
                 request = self.apply_parameter(request, param, value)?;
@@ -100,6 +101,26 @@ impl ApiClient {
                     "Required parameter '{}' not provided", 
                     param.name
                 )));
+            }
+        }
+        
+        // Handle body parameters - collect them into a single JSON object
+        if !body_params.is_empty() {
+            let mut body_json = serde_json::Map::new();
+            
+            for param in body_params {
+                if let Some(value) = parameters.get(&param.name) {
+                    body_json.insert(param.name.clone(), value.clone());
+                } else if param.required {
+                    return Err(AetherError::Api(format!(
+                        "Required body parameter '{}' not provided", 
+                        param.name
+                    )));
+                }
+            }
+            
+            if !body_json.is_empty() {
+                request = request.json(&Value::Object(body_json));
             }
         }
         
@@ -212,8 +233,8 @@ impl ApiClient {
                 Ok(request.header(&param.name, value_str))
             },
             "body" => {
-                // For body parameters, we typically send as JSON
-                Ok(request.json(value))
+                // Body parameters are now handled collectively in build_request
+                Ok(request)
             },
             "form" => {
                 // Form parameters are handled in build_request
