@@ -208,15 +208,36 @@ fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>) -
             // Look for application/json content
             else if let Some(json_content) = content.get("application/json") {
                 if let Some(schema) = json_content.get("schema") {
-                    // For JSON bodies, create a single "body" parameter with the entire schema
-                    parameters.push(Parameter {
-                        name: "body".to_string(),
-                        param_type: "body".to_string(), // Mark as body parameter
-                        required: request_body.get("required")
-                            .and_then(|r| r.as_bool())
-                            .unwrap_or(false),
-                        schema: schema.clone(),
-                    });
+                    // For JSON bodies, expand the schema properties into individual parameters
+                    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+                        let required_fields = schema.get("required")
+                            .and_then(|r| r.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str())
+                                    .collect::<std::collections::HashSet<_>>()
+                            })
+                            .unwrap_or_default();
+                        
+                        for (name, property_schema) in properties {
+                            parameters.push(Parameter {
+                                name: name.clone(),
+                                param_type: "body".to_string(), // Mark as body parameter
+                                required: required_fields.contains(name.as_str()),
+                                schema: property_schema.clone(),
+                            });
+                        }
+                    } else {
+                        // If no properties (e.g., free-form object), create a single body parameter
+                        parameters.push(Parameter {
+                            name: "body".to_string(),
+                            param_type: "body".to_string(),
+                            required: request_body.get("required")
+                                .and_then(|r| r.as_bool())
+                                .unwrap_or(false),
+                            schema: schema.clone(),
+                        });
+                    }
                 }
             }
         }
