@@ -92,8 +92,8 @@ impl OpenApiProcessor {
                         
                         let mut parameters = extract_parameters(op_obj)?;
                         
-                        // Also extract parameters from requestBody for form-encoded requests
-                        if let Some(request_body_params) = extract_request_body_parameters(op_obj)? {
+                        // Also extract parameters from requestBody, passing the full spec for $ref resolution
+                        if let Some(request_body_params) = extract_request_body_parameters(op_obj, &self.spec)? {
                             parameters.extend(request_body_params);
                         }
                         
@@ -176,7 +176,36 @@ fn extract_parameters(operation: &serde_json::Map<String, Value>) -> Result<Vec<
     Ok(parameters)
 }
 
-fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>) -> Result<Option<Vec<Parameter>>> {
+/// Resolve a $ref reference in the OpenAPI spec
+/// e.g., "#/components/schemas/CreateAssetRequest" -> the actual schema object
+fn resolve_ref<'a>(spec: &'a Value, ref_path: &str) -> Option<&'a Value> {
+    // Handle local references like "#/components/schemas/CreateAssetRequest"
+    if !ref_path.starts_with('#') {
+        return None; // External refs not supported
+    }
+    
+    let path = ref_path.trim_start_matches('#').trim_start_matches('/');
+    let parts: Vec<&str> = path.split('/').collect();
+    
+    let mut current = spec;
+    for part in parts {
+        current = current.get(part)?;
+    }
+    
+    Some(current)
+}
+
+/// Get the effective schema, resolving $ref if present
+fn get_effective_schema<'a>(schema: &'a Value, spec: &'a Value) -> &'a Value {
+    if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str()) {
+        if let Some(resolved) = resolve_ref(spec, ref_path) {
+            return resolved;
+        }
+    }
+    schema
+}
+
+fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>, spec: &Value) -> Result<Option<Vec<Parameter>>> {
     let mut parameters = Vec::new();
     
     if let Some(request_body) = operation.get("requestBody") {
@@ -184,8 +213,11 @@ fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>) -
             // Look for application/x-www-form-urlencoded content
             if let Some(form_content) = content.get("application/x-www-form-urlencoded") {
                 if let Some(schema) = form_content.get("schema") {
-                    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                        let required_fields = schema.get("required")
+                    // Resolve $ref if present
+                    let effective_schema = get_effective_schema(schema, spec);
+                    
+                    if let Some(properties) = effective_schema.get("properties").and_then(|p| p.as_object()) {
+                        let required_fields = effective_schema.get("required")
                             .and_then(|r| r.as_array())
                             .map(|arr| {
                                 arr.iter()
@@ -208,9 +240,12 @@ fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>) -
             // Look for application/json content
             else if let Some(json_content) = content.get("application/json") {
                 if let Some(schema) = json_content.get("schema") {
+                    // Resolve $ref if present
+                    let effective_schema = get_effective_schema(schema, spec);
+                    
                     // For JSON bodies, expand the schema properties into individual parameters
-                    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-                        let required_fields = schema.get("required")
+                    if let Some(properties) = effective_schema.get("properties").and_then(|p| p.as_object()) {
+                        let required_fields = effective_schema.get("required")
                             .and_then(|r| r.as_array())
                             .map(|arr| {
                                 arr.iter()
@@ -235,7 +270,7 @@ fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>) -
                             required: request_body.get("required")
                                 .and_then(|r| r.as_bool())
                                 .unwrap_or(false),
-                            schema: schema.clone(),
+                            schema: effective_schema.clone(),
                         });
                     }
                 }
