@@ -516,25 +516,14 @@ impl McpServer {
             if param.source == aether_core::types::ParameterSource::User {
                 let param_name = param.name.clone();
                 
-                // Extract type from schema
-                let param_type = if let Some(schema_type) = param.schema.get("type").and_then(|t| t.as_str()) {
-                    schema_type
-                } else {
-                    "string" // default to string
-                };
+                // Use the full parameter schema as the base
+                let mut property = param.schema.as_object().cloned().unwrap_or_else(|| {
+                    let mut m = serde_json::Map::new();
+                    m.insert("type".to_string(), serde_json::Value::String("string".to_string()));
+                    m
+                });
                 
-                let param_schema = match param_type {
-                    "string" => serde_json::json!({"type": "string"}),
-                    "integer" => serde_json::json!({"type": "integer"}),
-                    "number" => serde_json::json!({"type": "number"}),
-                    "boolean" => serde_json::json!({"type": "boolean"}),
-                    _ => serde_json::json!({"type": "string"}), // default to string
-                };
-                
-                let mut property = serde_json::Map::new();
-                property.insert("type".to_string(), param_schema["type"].clone());
-                
-                // Add description
+                // Add or override description
                 if let Some(desc) = &param.description {
                     property.insert("description".to_string(), serde_json::Value::String(desc.clone()));
                 } else if let Some(desc) = param.schema.get("description").and_then(|d| d.as_str()) {
