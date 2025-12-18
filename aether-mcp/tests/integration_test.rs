@@ -237,6 +237,7 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
         oidc: None,
         session: None,
         dev: None,
+        mcp_auth: None,
     };
     
     let server = McpServer::new(config).await?;

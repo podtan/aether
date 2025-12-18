@@ -205,6 +205,20 @@ fn extract_request_body_parameters(operation: &serde_json::Map<String, Value>) -
                     }
                 }
             }
+            // Look for application/json content
+            else if let Some(json_content) = content.get("application/json") {
+                if let Some(schema) = json_content.get("schema") {
+                    // For JSON bodies, create a single "body" parameter with the entire schema
+                    parameters.push(Parameter {
+                        name: "body".to_string(),
+                        param_type: "body".to_string(), // Mark as body parameter
+                        required: request_body.get("required")
+                            .and_then(|r| r.as_bool())
+                            .unwrap_or(false),
+                        schema: schema.clone(),
+                    });
+                }
+            }
         }
     }
     
