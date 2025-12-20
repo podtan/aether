@@ -95,7 +95,9 @@ impl ApiClient {
         // Apply non-form, non-body parameters first
         for param in other_params {
             if let Some(value) = parameters.get(&param.name) {
-                request = self.apply_parameter(request, param, value)?;
+                // Coerce value to expected type based on schema
+                let coerced_value = self.coerce_value_to_schema_type(value, &param.schema, &param.name)?;
+                request = self.apply_parameter(request, param, &coerced_value)?;
             } else if param.required {
                 return Err(AetherError::Api(format!(
                     "Required parameter '{}' not provided", 
@@ -110,7 +112,9 @@ impl ApiClient {
             
             for param in body_params {
                 if let Some(value) = parameters.get(&param.name) {
-                    body_json.insert(param.name.clone(), value.clone());
+                    // Coerce value to expected type based on schema
+                    let coerced_value = self.coerce_value_to_schema_type(value, &param.schema, &param.name)?;
+                    body_json.insert(param.name.clone(), coerced_value);
                 } else if param.required {
                     return Err(AetherError::Api(format!(
                         "Required body parameter '{}' not provided", 
@@ -265,6 +269,61 @@ impl ApiClient {
                     .join(",")
             },
             _ => value.to_string(),
+        }
+    }
+    
+    /// Coerce a JSON value to match the expected schema type
+    /// This handles cases where LLMs send numeric values as strings
+    fn coerce_value_to_schema_type(&self, value: &Value, schema: &Value, param_name: &str) -> Result<Value> {
+        let schema_type = schema.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+        
+        match (schema_type, value) {
+            // If schema expects integer and we got a string, try to parse it
+            ("integer", Value::String(s)) => {
+                if s.is_empty() {
+                    // Empty string - return null or error based on context
+                    return Err(AetherError::Api(format!(
+                        "Empty string cannot be converted to integer for parameter '{}'",
+                        param_name
+                    )));
+                }
+                s.parse::<i64>()
+                    .map(|n| Value::Number(n.into()))
+                    .map_err(|_| AetherError::Api(format!(
+                        "Cannot parse '{}' as integer for parameter '{}'",
+                        s, param_name
+                    )))
+            },
+            // If schema expects number and we got a string, try to parse it
+            ("number", Value::String(s)) => {
+                if s.is_empty() {
+                    return Err(AetherError::Api(format!(
+                        "Empty string cannot be converted to number for parameter '{}'",
+                        param_name
+                    )));
+                }
+                s.parse::<f64>()
+                    .map(|n| serde_json::Number::from_f64(n)
+                        .map(Value::Number)
+                        .unwrap_or_else(|| Value::String(s.clone())))
+                    .map_err(|_| AetherError::Api(format!(
+                        "Cannot parse '{}' as number for parameter '{}'",
+                        s, param_name
+                    )))
+            },
+            // If schema expects boolean and we got a string, try to parse it
+            ("boolean", Value::String(s)) => {
+                match s.to_lowercase().as_str() {
+                    "true" | "1" | "yes" => Ok(Value::Bool(true)),
+                    "false" | "0" | "no" => Ok(Value::Bool(false)),
+                    _ => Err(AetherError::Api(format!(
+                        "Cannot parse '{}' as boolean for parameter '{}'",
+                        s, param_name
+                    ))),
+                }
+            },
+            // Value already matches expected type or is compatible
+            _ => Ok(value.clone()),
         }
     }
     
