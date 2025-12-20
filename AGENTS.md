@@ -24,21 +24,21 @@ cargo build
 
 ### Run Commands
 
-#### MCP Service (Port 9000)
+#### MCP Service (Port 8000)
 ```bash
 # Single-config mode with stdio transport (for MCP client integration)
 ./target/release/aether --config config.yaml --stdio
 
 # Single-config mode with HTTP/SSE transport
-./target/release/aether --config config.yaml --host 127.0.0.1 --port 9000
+./target/release/aether --config config.yaml --host 127.0.0.1 --port 8000
 
 # Multi-config mode (directory-based, HTTP only)
-./target/release/aether --multi-config --configs-dir configs --host 0.0.0.0 --port 9000
+./target/release/aether --multi-config --configs-dir configs --host 0.0.0.0 --port 8000
 ```
 
-#### Web UI Service (Port 9001)
+#### Web UI Service (Port 8001)
 ```bash
-./target/release/aether-web --config config.toml --host 0.0.0.0 --port 9001 --mcp-url http://localhost:9000
+./target/release/aether-web --config config.toml --host 0.0.0.0 --port 8001 --mcp-url http://localhost:8000
 ```
 
 #### CLI Config Generator
@@ -92,12 +92,12 @@ This is a Cargo workspace with 7 crates organized by responsibility:
 Aether runs as **two separate services** in production:
 
 1. **aether** (MCP Service): Handles MCP protocol, tool execution, API calls, admin API endpoints
-   - Default port: 9000
+   - Default port: 8000
    - Transports: stdio (for MCP clients) or HTTP/SSE (for web/remote access)
    - Admin API: `/api/upload-openapi`, `/api/list`, `/api/{api}/config`, etc.
 
 2. **aether-web** (Web UI): Provides authenticated web interface for config management
-   - Default port: 9001
+   - Default port: 8001
    - Communicates with MCP service via HTTP client
    - OIDC authentication support
 
@@ -157,7 +157,7 @@ See `SPLIT_SERVICES_ARCHITECTURE.md` for detailed deployment architecture.
 ```yaml
 server:
   host: 127.0.0.1
-  port: 9000
+  port: 8000
   log_level: info
 
 apis:
@@ -195,7 +195,7 @@ enhanced_tools:
 ```toml
 [server]
 host = "0.0.0.0"
-port = 9001
+port = 8001
 log_level = "info"
 
 [oidc]
@@ -269,13 +269,13 @@ When changing types in `aether-core`:
 ### Manual Testing
 ```bash
 # Test MCP health endpoint
-curl http://127.0.0.1:9000/health
+curl http://127.0.0.1:8000/health
 
 # List configured APIs (multi-config mode)
-curl http://127.0.0.1:9000/api/list
+curl http://127.0.0.1:8000/api/list
 
 # Upload new API via admin API
-curl -X POST http://127.0.0.1:9000/api/upload-openapi \
+curl -X POST http://127.0.0.1:8000/api/upload-openapi \
   -H "Content-Type: application/json" \
   -d '{"api_name":"test","base_url":"https://api.example.com","openapi_content":"..."}'
 ```
