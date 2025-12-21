@@ -1,15 +1,15 @@
 //! Multi-configuration server manager
-//! 
+//!
 //! Manages multiple API configurations and serves them at different endpoints
 
 use crate::McpServer;
-use aether_config::{AetherConfig, directory::ConfigDirectoryManager};
+use aether_config::{directory::ConfigDirectoryManager, AetherConfig};
 use aether_core::Result;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, error};
+use tracing::{error, info};
 
 /// Multi-configuration server manager
 #[derive(Clone)]
@@ -51,10 +51,13 @@ impl MultiConfigServer {
 
         // Create MCP server for this API
         let mcp_server = McpServer::new(config).await?;
-        
+
         // Add to our servers map
-        self.servers.write().await.insert(api_name.to_string(), mcp_server);
-        
+        self.servers
+            .write()
+            .await
+            .insert(api_name.to_string(), mcp_server);
+
         info!("Added API configuration: {}", api_name);
         Ok(())
     }
@@ -74,10 +77,10 @@ impl MultiConfigServer {
     pub async fn remove_api_config(&self, api_name: &str) -> Result<()> {
         // Remove from disk
         self.directory_manager.delete_api_config(api_name).await?;
-        
+
         // Remove from memory
         self.servers.write().await.remove(api_name);
-        
+
         info!("Removed API configuration: {}", api_name);
         Ok(())
     }
@@ -96,8 +99,11 @@ impl MultiConfigServer {
 
         // Update in memory
         let mcp_server = McpServer::new(config).await?;
-        self.servers.write().await.insert(api_name.to_string(), mcp_server);
-        
+        self.servers
+            .write()
+            .await
+            .insert(api_name.to_string(), mcp_server);
+
         info!("Updated API configuration: {}", api_name);
         Ok(())
     }
@@ -105,7 +111,7 @@ impl MultiConfigServer {
     /// Reload all configurations from disk
     pub async fn reload_all_configurations(&self) -> Result<()> {
         info!("Reloading all API configurations from disk");
-        
+
         let configs = self.directory_manager.load_all_configs().await?;
         let mut servers = self.servers.write().await;
         servers.clear();

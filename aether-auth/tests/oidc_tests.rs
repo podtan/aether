@@ -1,14 +1,14 @@
 use aether_auth::oidc::OidcValidator;
+use serde_json::json;
 use wiremock::{
-    matchers::{method, path, header},
+    matchers::{header, method, path},
     Mock, MockServer, ResponseTemplate,
 };
-use serde_json::json;
 
 #[tokio::test]
 async fn test_oidc_discovery() {
     let mock_server = MockServer::start().await;
-    
+
     // Mock OIDC discovery endpoint
     Mock::given(method("GET"))
         .and(path("/.well-known/openid-configuration"))
@@ -22,24 +22,24 @@ async fn test_oidc_discovery() {
         .expect(1)
         .mount(&mock_server)
         .await;
-    
+
     // Create validator - this should trigger discovery
-    let result = OidcValidator::new(
-        &mock_server.uri(),
-        "test_client_id",
-        "test_client_secret",
-    ).await;
-    
+    let result =
+        OidcValidator::new(&mock_server.uri(), "test_client_id", "test_client_secret").await;
+
     assert!(result.is_ok(), "OIDC discovery should succeed");
-    
+
     let validator = result.unwrap();
-    assert!(validator.health_check().await.is_ok(), "Health check should pass after discovery");
+    assert!(
+        validator.health_check().await.is_ok(),
+        "Health check should pass after discovery"
+    );
 }
 
 #[tokio::test]
 async fn test_validate_valid_token() {
     let mock_server = MockServer::start().await;
-    
+
     // Mock OIDC discovery endpoint
     Mock::given(method("GET"))
         .and(path("/.well-known/openid-configuration"))
@@ -53,7 +53,7 @@ async fn test_validate_valid_token() {
         .expect(1)
         .mount(&mock_server)
         .await;
-    
+
     // Mock successful userinfo response
     Mock::given(method("GET"))
         .and(path("/userinfo"))
@@ -66,17 +66,15 @@ async fn test_validate_valid_token() {
         })))
         .mount(&mock_server)
         .await;
-    
-    let validator = OidcValidator::new(
-        &mock_server.uri(),
-        "test_client_id",
-        "test_client_secret",
-    ).await.expect("Discovery should succeed");
-    
+
+    let validator = OidcValidator::new(&mock_server.uri(), "test_client_id", "test_client_secret")
+        .await
+        .expect("Discovery should succeed");
+
     // Validate token
     let result = validator.validate_bearer_token("valid_token_123").await;
     assert!(result.is_ok(), "Valid token should be accepted");
-    
+
     let claims = result.unwrap();
     assert_eq!(claims.sub, "user123");
     assert_eq!(claims.email, "user@example.com");
@@ -87,7 +85,7 @@ async fn test_validate_valid_token() {
 #[tokio::test]
 async fn test_validate_invalid_token() {
     let mock_server = MockServer::start().await;
-    
+
     // Mock OIDC discovery endpoint
     Mock::given(method("GET"))
         .and(path("/.well-known/openid-configuration"))
@@ -101,7 +99,7 @@ async fn test_validate_invalid_token() {
         .expect(1)
         .mount(&mock_server)
         .await;
-    
+
     // Mock 401 unauthorized response for invalid token
     Mock::given(method("GET"))
         .and(path("/userinfo"))
@@ -112,13 +110,11 @@ async fn test_validate_invalid_token() {
         })))
         .mount(&mock_server)
         .await;
-    
-    let validator = OidcValidator::new(
-        &mock_server.uri(),
-        "test_client_id",
-        "test_client_secret",
-    ).await.expect("Discovery should succeed");
-    
+
+    let validator = OidcValidator::new(&mock_server.uri(), "test_client_id", "test_client_secret")
+        .await
+        .expect("Discovery should succeed");
+
     // Validate invalid token
     let result = validator.validate_bearer_token("invalid_token_xyz").await;
     assert!(result.is_err(), "Invalid token should be rejected");
@@ -127,7 +123,7 @@ async fn test_validate_invalid_token() {
 #[tokio::test]
 async fn test_validate_token_missing_sub_claim() {
     let mock_server = MockServer::start().await;
-    
+
     // Mock OIDC discovery endpoint
     Mock::given(method("GET"))
         .and(path("/.well-known/openid-configuration"))
@@ -141,7 +137,7 @@ async fn test_validate_token_missing_sub_claim() {
         .expect(1)
         .mount(&mock_server)
         .await;
-    
+
     // Mock userinfo response missing required 'sub' claim
     Mock::given(method("GET"))
         .and(path("/userinfo"))
@@ -152,43 +148,41 @@ async fn test_validate_token_missing_sub_claim() {
         })))
         .mount(&mock_server)
         .await;
-    
-    let validator = OidcValidator::new(
-        &mock_server.uri(),
-        "test_client_id",
-        "test_client_secret",
-    ).await.expect("Discovery should succeed");
-    
+
+    let validator = OidcValidator::new(&mock_server.uri(), "test_client_id", "test_client_secret")
+        .await
+        .expect("Discovery should succeed");
+
     // Validate token with missing sub claim
     let result = validator.validate_bearer_token("token_without_sub").await;
-    assert!(result.is_err(), "Token without 'sub' claim should be rejected");
+    assert!(
+        result.is_err(),
+        "Token without 'sub' claim should be rejected"
+    );
 }
 
 #[tokio::test]
 async fn test_discovery_failure() {
     let mock_server = MockServer::start().await;
-    
+
     // Mock discovery endpoint returning 404
     Mock::given(method("GET"))
         .and(path("/.well-known/openid-configuration"))
         .respond_with(ResponseTemplate::new(404))
         .mount(&mock_server)
         .await;
-    
+
     // Attempt to create validator with failing discovery
-    let result = OidcValidator::new(
-        &mock_server.uri(),
-        "test_client_id",
-        "test_client_secret",
-    ).await;
-    
+    let result =
+        OidcValidator::new(&mock_server.uri(), "test_client_id", "test_client_secret").await;
+
     assert!(result.is_err(), "Discovery failure should return error");
 }
 
 #[tokio::test]
 async fn test_validate_token_with_optional_fields() {
     let mock_server = MockServer::start().await;
-    
+
     // Mock OIDC discovery endpoint
     Mock::given(method("GET"))
         .and(path("/.well-known/openid-configuration"))
@@ -202,7 +196,7 @@ async fn test_validate_token_with_optional_fields() {
         .expect(1)
         .mount(&mock_server)
         .await;
-    
+
     // Mock userinfo with minimal claims (only sub required)
     Mock::given(method("GET"))
         .and(path("/userinfo"))
@@ -212,17 +206,18 @@ async fn test_validate_token_with_optional_fields() {
         })))
         .mount(&mock_server)
         .await;
-    
-    let validator = OidcValidator::new(
-        &mock_server.uri(),
-        "test_client_id",
-        "test_client_secret",
-    ).await.expect("Discovery should succeed");
-    
+
+    let validator = OidcValidator::new(&mock_server.uri(), "test_client_id", "test_client_secret")
+        .await
+        .expect("Discovery should succeed");
+
     // Validate token with minimal claims
     let result = validator.validate_bearer_token("minimal_token").await;
-    assert!(result.is_ok(), "Token with minimal claims should be accepted");
-    
+    assert!(
+        result.is_ok(),
+        "Token with minimal claims should be accepted"
+    );
+
     let claims = result.unwrap();
     assert_eq!(claims.sub, "user456");
     assert_eq!(claims.email, "unknown@example.com"); // Default value

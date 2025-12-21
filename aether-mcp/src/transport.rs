@@ -1,26 +1,26 @@
 //! Transport implementations for MCP protocol
-//! 
+//!
 //! Supports both stdio and HTTP SSE (Server-Sent Events) transports
 
-use crate::{McpServer, multi_server::MultiConfigServer, protocol::McpRequest};
+use crate::{multi_server::MultiConfigServer, protocol::McpRequest, McpServer};
 use aether_config::generator;
 use aether_web::WebState;
+use anyhow;
 use axum::{
-    extract::{Query, State, Path as AxumPath},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize};
+use serde::Deserialize;
 use serde_json::Value;
-use std::{collections::HashMap, convert::Infallible, sync::Arc, net::SocketAddr};
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::sync::{mpsc, RwLock};
 use tokio_stream::StreamExt;
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, error, info, warn};
-use anyhow;
 
 /// Request payload for config generation API
 #[derive(Debug, Deserialize)]
@@ -73,13 +73,7 @@ impl HttpSseTransport {
 
         // Create auth middleware state if configured
         let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
-            Some(
-                crate::middleware::AuthMiddlewareState::new(
-                    mcp_auth_config,
-                    oidc_config,
-                )
-                .await?,
-            )
+            Some(crate::middleware::AuthMiddlewareState::new(mcp_auth_config, oidc_config).await?)
         } else {
             None
         };
@@ -143,13 +137,16 @@ pub async fn handle_message(
     if let Some(session_id) = params.get("session_id") {
         debug!("Handling POST message for session: {}", session_id);
         debug!("Parsing session ID: {}", session_id);
-        debug!("Received and validating JSON-RPC {} request", request.method);
+        debug!(
+            "Received and validating JSON-RPC {} request",
+            request.method
+        );
         debug!("Preparing to send response");
-        
+
         // Handle the request
         let response = app_state.server.handle_request(request).await;
         debug!("Generated MCP response: {:?}", response);
-        
+
         // Send response via SSE if session exists
         if let Ok(connections) = app_state.sse_state.connections.try_read() {
             if let Some(sender) = connections.get(session_id) {
@@ -158,13 +155,16 @@ pub async fn handle_message(
                 let event = Event::default()
                     .event("message")
                     .data(response_json.clone());
-                
+
                 debug!("Sending JSON-RPC response via SSE");
                 debug!("Outgoing message: {}", response_json);
                 debug!("Actual chunk sent: {}", response_json);
-                
+
                 if let Err(e) = sender.send(event) {
-                    warn!("Failed to send response to SSE session {}: {}", session_id, e);
+                    warn!(
+                        "Failed to send response to SSE session {}: {}",
+                        session_id, e
+                    );
                 } else {
                     debug!("Sent MCP response to SSE session: {}", session_id);
                 }
@@ -172,7 +172,7 @@ pub async fn handle_message(
                 warn!("SSE session not found: {}", session_id);
             }
         }
-        
+
         // Return 202 Accepted for session-based requests (like standard MCP server)
         debug!("Responding with HTTP 202 Accepted");
         return Ok(Json(serde_json::json!({"status": "accepted"})));
@@ -216,36 +216,45 @@ pub async fn handle_sse(
     debug!("Setting up SSE connection");
 
     // Generate or use provided connection ID - use UUID format like Python server
-    let connection_id = params.get("session_id")
+    let connection_id = params
+        .get("session_id")
         .map(|s| s.clone())
         .unwrap_or_else(|| {
             // Generate a simple session ID
-            format!("session_{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs())
+            format!(
+                "session_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            )
         });
-    
+
     debug!("Created new session with ID: {}", connection_id);
-    
+
     // Create a channel for sending events to this specific connection
     let (tx, rx) = mpsc::unbounded_channel();
 
     // Store the sender in our global state
-    app_state.sse_state.connections.write().await
+    app_state
+        .sse_state
+        .connections
+        .write()
+        .await
         .insert(connection_id.clone(), tx.clone());
     debug!("SSE connection {} registered in state", connection_id);
 
     debug!("Starting SSE response task");
-    
+
     // CRITICAL: Send the endpoint event immediately after connection setup
     // This is what rmcp's SseClientTransport::start() is waiting for!
     let endpoint_url = format!("/messages/?session_id={}", connection_id);
-    let endpoint_event = Event::default()
-        .event("endpoint")
-        .data(endpoint_url);
-    
-    debug!("Sending endpoint event with URL: /messages/?session_id={}", connection_id);
+    let endpoint_event = Event::default().event("endpoint").data(endpoint_url);
+
+    debug!(
+        "Sending endpoint event with URL: /messages/?session_id={}",
+        connection_id
+    );
     if let Err(e) = tx.send(endpoint_event) {
         error!("Failed to send endpoint event: {}", e);
     }
@@ -263,24 +272,33 @@ pub async fn handle_sse(
     // Return SSE response with session_id header - this is critical for rmcp
     let headers = [
         ("x-session-id", connection_id.clone()),
-        ("cache-control", "no-cache".to_string()),  
+        ("cache-control", "no-cache".to_string()),
         ("connection", "keep-alive".to_string()),
         ("content-type", "text/event-stream".to_string()),
         ("access-control-allow-origin", "*".to_string()),
         ("access-control-allow-headers", "*".to_string()),
     ];
-    
+
     // Use axum's built-in KeepAlive which sends SSE comments (`: keep-alive`)
     // instead of data events that rmcp would try to parse as JSON
-    (headers, Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30))))
+    (
+        headers,
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30))),
+    )
 }
 
 /// Handle config generation API
 pub async fn handle_generate_config(
     Json(request): Json<GenerateConfigRequest>,
 ) -> Result<String, StatusCode> {
-    info!("🔧 Received config generation request for API: {}", request.api_name);
-    debug!("OpenAPI content length: {} bytes", request.openapi_content.len());
+    info!(
+        "🔧 Received config generation request for API: {}",
+        request.api_name
+    );
+    debug!(
+        "OpenAPI content length: {} bytes",
+        request.openapi_content.len()
+    );
     debug!("Base URL: {}", request.base_url);
 
     // Generate the config using the generator module
@@ -288,10 +306,15 @@ pub async fn handle_generate_config(
         &request.openapi_content,
         &request.api_name,
         &request.base_url,
-    ).await {
+    )
+    .await
+    {
         Ok(config) => {
-            info!("✅ Successfully generated config for API: {}", request.api_name);
-            
+            info!(
+                "✅ Successfully generated config for API: {}",
+                request.api_name
+            );
+
             // Serialize config to YAML
             match serde_yaml::to_string(&config) {
                 Ok(yaml_config) => {
@@ -316,13 +339,25 @@ pub async fn health_check(State(app_state): State<AppState>) -> Json<Value> {
     let stats = app_state.server.get_stats().await;
     let mut health = serde_json::Map::new();
     health.insert("status".to_string(), Value::String("healthy".to_string()));
-    health.insert("server".to_string(), Value::String("aether-mcp".to_string()));
-    health.insert("version".to_string(), Value::String(env!("CARGO_PKG_VERSION").to_string()));
-    health.insert("stats".to_string(), Value::Object(stats.into_iter().collect()));
+    health.insert(
+        "server".to_string(),
+        Value::String("aether-mcp".to_string()),
+    );
+    health.insert(
+        "version".to_string(),
+        Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    );
+    health.insert(
+        "stats".to_string(),
+        Value::Object(stats.into_iter().collect()),
+    );
 
     // Add SSE connection count
     let connection_count = app_state.sse_state.connections.read().await.len();
-    health.insert("sse_connections".to_string(), Value::Number(connection_count.into()));
+    health.insert(
+        "sse_connections".to_string(),
+        Value::Number(connection_count.into()),
+    );
 
     Json(Value::Object(health))
 }
@@ -380,7 +415,8 @@ impl StdioTransport {
                             // Send the response
                             match serde_json::to_string(&response) {
                                 Ok(response_json) => {
-                                    if let Err(e) = stdout.write_all(response_json.as_bytes()).await {
+                                    if let Err(e) = stdout.write_all(response_json.as_bytes()).await
+                                    {
                                         error!("Failed to write response: {}", e);
                                         break;
                                     }
@@ -440,16 +476,14 @@ impl MultiConfigTransport {
     /// Create a new multi-config HTTP transport
     pub fn new(multi_server: MultiConfigServer, bind_addr: SocketAddr) -> Self {
         let multi_server_arc = Arc::new(multi_server);
-        
+
         // Create a callback that captures the multi_server to list APIs
         let multi_server_for_callback = multi_server_arc.clone();
         let runtime_apis_callback = move || {
             let multi_server = multi_server_for_callback.clone();
-            async move {
-                multi_server.list_apis().await
-            }
+            async move { multi_server.list_apis().await }
         };
-        
+
         Self {
             web_state: WebState::new_with_runtime_apis_callback(runtime_apis_callback),
             multi_server: multi_server_arc,
@@ -458,7 +492,10 @@ impl MultiConfigTransport {
     }
 
     /// Create an app with web routes added
-    pub async fn create_app_with_web_routes(self, web_config: &aether_config::AetherConfig) -> anyhow::Result<Router> {
+    pub async fn create_app_with_web_routes(
+        self,
+        web_config: &aether_config::AetherConfig,
+    ) -> anyhow::Result<Router> {
         let multi_state = MultiAppState {
             multi_server: self.multi_server.clone(),
             sse_state: SseState::new(),
@@ -468,53 +505,63 @@ impl MultiConfigTransport {
         // Create upload callback that uses the multi-config server
         let multi_server_for_callback = self.multi_server.clone();
         let web_state_for_callback = self.web_state.clone();
-        let upload_callback = move |multipart: axum::extract::Multipart, user: Option<aether_web::UserInfo>| {
-            let multi_server = multi_server_for_callback.clone();
-            let web_state = web_state_for_callback.clone();
-            async move {
-                let callback = |api_name: String, config: aether_config::AetherConfig, openapi_content: String| {
-                    let multi_server = multi_server.clone();
-                    async move {
-                        info!("🚀 Transport callback called for API: {}", api_name);
-                        match multi_server
-                            .add_api_config(&api_name, config, &openapi_content)
-                            .await
-                        {
-                            Ok(()) => {
-                                info!("✅ MultiConfigServer.add_api_config succeeded for API: {}", api_name);
-                                Ok(())
-                            }
-                            Err(e) => {
-                                error!("❌ MultiConfigServer.add_api_config failed for API {}: {}", api_name, e);
-                                Err(e.to_string())
+        let upload_callback =
+            move |multipart: axum::extract::Multipart, user: Option<aether_web::UserInfo>| {
+                let multi_server = multi_server_for_callback.clone();
+                let web_state = web_state_for_callback.clone();
+                async move {
+                    let callback = |api_name: String,
+                                    config: aether_config::AetherConfig,
+                                    openapi_content: String| {
+                        let multi_server = multi_server.clone();
+                        async move {
+                            info!("🚀 Transport callback called for API: {}", api_name);
+                            match multi_server
+                                .add_api_config(&api_name, config, &openapi_content)
+                                .await
+                            {
+                                Ok(()) => {
+                                    info!(
+                                        "✅ MultiConfigServer.add_api_config succeeded for API: {}",
+                                        api_name
+                                    );
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "❌ MultiConfigServer.add_api_config failed for API {}: {}",
+                                        api_name, e
+                                    );
+                                    Err(e.to_string())
+                                }
                             }
                         }
-                    }
-                };
+                    };
 
-                aether_web::handle_upload_with_multi_server(
-                    multipart,
-                    &web_state,
-                    user,
-                    callback,
-                ).await
-            }
-        };
+                    aether_web::handle_upload_with_multi_server(
+                        multipart, &web_state, user, callback,
+                    )
+                    .await
+                }
+            };
 
         // Create web router with multi-config upload integration using existing web_state
-        let web_router = aether_web::create_router_with_existing_web_state(web_config, self.web_state.clone(), upload_callback).await?;
+        let web_router = aether_web::create_router_with_existing_web_state(
+            web_config,
+            self.web_state.clone(),
+            upload_callback,
+        )
+        .await?;
 
         let mcp_router = Router::new()
             // Legacy single-API endpoints (for backwards compatibility)
             .route("/message", post(handle_single_message))
             .route("/messages", post(handle_single_message))
             .route("/sse", get(handle_single_sse))
-
-            // Multi-API endpoints  
+            // Multi-API endpoints
             .route("/{api_name}/message", post(handle_multi_message))
             .route("/{api_name}/messages", post(handle_multi_message))
             .route("/{api_name}/sse", get(handle_multi_sse))
-
             // API management endpoints
             .route("/api/generate-config", post(handle_generate_config))
             .route("/api/upload-openapi", post(handle_upload_openapi))
@@ -522,16 +569,18 @@ impl MultiConfigTransport {
             .route("/api/{api_name}/config", get(handle_get_config))
             .route("/api/{api_name}/config", post(handle_update_config))
             .route("/api/{api_name}/delete", post(handle_delete_api))
-
             // Health and stats
             .route("/health", get(handle_multi_health))
             .route("/stats", get(handle_all_stats))
             .with_state(multi_state.clone());
 
         let app = Router::new()
-            .nest("/web", web_router)  // Web auth routes under /web
-            .route("/oauth2/callback", axum::routing::get(oauth2_callback_redirect))  // Handle OAuth2 callback redirects
-            .merge(mcp_router)  // Multi-config MCP routes at root level
+            .nest("/web", web_router) // Web auth routes under /web
+            .route(
+                "/oauth2/callback",
+                axum::routing::get(oauth2_callback_redirect),
+            ) // Handle OAuth2 callback redirects
+            .merge(mcp_router) // Multi-config MCP routes at root level
             .layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
@@ -555,13 +604,7 @@ impl MultiConfigTransport {
 
         // Create auth middleware state if configured
         let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
-            Some(
-                crate::middleware::AuthMiddlewareState::new(
-                    mcp_auth_config,
-                    oidc_config,
-                )
-                .await?,
-            )
+            Some(crate::middleware::AuthMiddlewareState::new(mcp_auth_config, oidc_config).await?)
         } else {
             None
         };
@@ -604,7 +647,10 @@ impl MultiConfigTransport {
             )
             .with_state(multi_state);
 
-        info!("Starting Multi-Config MCP HTTP server on {}", self.bind_addr);
+        info!(
+            "Starting Multi-Config MCP HTTP server on {}",
+            self.bind_addr
+        );
 
         let listener = tokio::net::TcpListener::bind(self.bind_addr)
             .await
@@ -656,21 +702,30 @@ async fn handle_api_message(
     params: HashMap<String, String>,
     request: McpRequest,
 ) -> Result<Json<Value>, StatusCode> {
-    debug!("Received MCP request for API {}: {}", api_name, request.method);
+    debug!(
+        "Received MCP request for API {}: {}",
+        api_name, request.method
+    );
 
     // Get the MCP server for this API
-    let server = app_state.multi_server.get_server(api_name).await
+    let server = app_state
+        .multi_server
+        .get_server(api_name)
+        .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
     // Check if this is a session-based request
     if let Some(session_id) = params.get("session_id") {
         let session_key = format!("{}:{}", api_name, session_id);
         debug!("Handling POST message for session: {}", session_key);
-        
+
         // Handle the request
         let response = server.handle_request(request).await;
-        debug!("Generated MCP response for API {}: {:?}", api_name, response);
-        
+        debug!(
+            "Generated MCP response for API {}: {:?}",
+            api_name, response
+        );
+
         // Send response via SSE if session exists
         if let Ok(connections) = app_state.sse_state.connections.try_read() {
             if let Some(sender) = connections.get(&session_key) {
@@ -678,11 +733,14 @@ async fn handle_api_message(
                 let event = Event::default()
                     .event("message")
                     .data(response_json.clone());
-                
+
                 debug!("Sending JSON-RPC response via SSE for API {}", api_name);
-                
+
                 if let Err(e) = sender.send(event) {
-                    warn!("Failed to send response to SSE session {}: {}", session_key, e);
+                    warn!(
+                        "Failed to send response to SSE session {}: {}",
+                        session_key, e
+                    );
                 } else {
                     debug!("Sent MCP response to SSE session: {}", session_key);
                 }
@@ -690,7 +748,7 @@ async fn handle_api_message(
                 warn!("SSE session not found: {}", session_key);
             }
         }
-        
+
         return Ok(Json(serde_json::json!({"status": "accepted"})));
     }
 
@@ -703,7 +761,13 @@ async fn handle_api_message(
 pub async fn handle_single_sse(
     State(app_state): State<MultiAppState>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<(axum::http::HeaderMap, Sse<impl Stream<Item = Result<Event, Infallible>>>), StatusCode> {
+) -> Result<
+    (
+        axum::http::HeaderMap,
+        Sse<impl Stream<Item = Result<Event, Infallible>>>,
+    ),
+    StatusCode,
+> {
     // For backwards compatibility, use the first available API
     let apis = app_state.multi_server.list_apis().await;
     if let Some(first_api) = apis.first() {
@@ -718,7 +782,13 @@ pub async fn handle_multi_sse(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
     Query(params): Query<HashMap<String, String>>,
-) -> Result<(axum::http::HeaderMap, Sse<impl Stream<Item = Result<Event, Infallible>>>), StatusCode> {
+) -> Result<
+    (
+        axum::http::HeaderMap,
+        Sse<impl Stream<Item = Result<Event, Infallible>>>,
+    ),
+    StatusCode,
+> {
     debug!("New SSE connection request for API: {}", api_name);
 
     // Verify API exists
@@ -727,28 +797,43 @@ pub async fn handle_multi_sse(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let session_id = params.get("session_id")
+    let session_id = params
+        .get("session_id")
         .map(|s| s.clone())
-        .unwrap_or_else(|| format!("session_{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()));
+        .unwrap_or_else(|| {
+            format!(
+                "session_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            )
+        });
 
     let session_key = format!("{}:{}", api_name, session_id);
-    info!("Establishing SSE connection for API {} with session: {}", api_name, session_key);
-    
+    info!(
+        "Establishing SSE connection for API {} with session: {}",
+        api_name, session_key
+    );
+
     let (tx, rx) = mpsc::unbounded_channel();
-    
+
     // Store the sender for this session
-    app_state.sse_state.connections.write().await.insert(session_key.clone(), tx.clone());
-    
+    app_state
+        .sse_state
+        .connections
+        .write()
+        .await
+        .insert(session_key.clone(), tx.clone());
+
     // CRITICAL: Send the endpoint event that rmcp client is waiting for
     let endpoint_url = format!("/{}/messages?session_id={}", api_name, session_id);
-    let endpoint_event = Event::default()
-        .event("endpoint")
-        .data(endpoint_url);
-    
-    debug!("Sending endpoint event with URL: /{}/messages?session_id={}", api_name, session_id);
+    let endpoint_event = Event::default().event("endpoint").data(endpoint_url);
+
+    debug!(
+        "Sending endpoint event with URL: /{}/messages?session_id={}",
+        api_name, session_id
+    );
     if let Err(e) = tx.send(endpoint_event) {
         error!("Failed to send endpoint event: {}", e);
     }
@@ -756,11 +841,10 @@ pub async fn handle_multi_sse(
     // Note: We use axum's built-in KeepAlive instead of manual ping events.
     // Manual ping events with `event: ping\ndata: keep-alive` cause parsing errors
     // in rmcp because it tries to parse the data as JSON-RPC.
-    
+
     // Create the stream
-    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
-        .map(|event| Ok(event));
-    
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(|event| Ok(event));
+
     // Set headers for SSE - match the single-config version format
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("x-session-id", session_id.parse().unwrap());
@@ -769,12 +853,14 @@ pub async fn handle_multi_sse(
     headers.insert("content-type", "text/event-stream".parse().unwrap());
     headers.insert("access-control-allow-origin", "*".parse().unwrap());
     headers.insert("access-control-allow-headers", "*".parse().unwrap());
-    
+
     // Use axum's built-in KeepAlive which sends SSE comments (`: keep-alive`)
     // instead of data events that rmcp would try to parse as JSON
-    Ok((headers, Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30)))))
+    Ok((
+        headers,
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30))),
+    ))
 }
-
 
 use futures::Stream;
 
@@ -790,17 +876,19 @@ pub async fn handle_upload_openapi(
         &request.openapi_content,
         &request.api_name,
         &request.base_url,
-    ).await {
+    )
+    .await
+    {
         Ok(config) => {
             // Add the configuration to the multi-server
-            match app_state.multi_server.add_api_config(
-                &request.api_name,
-                config,
-                &request.openapi_content,
-            ).await {
+            match app_state
+                .multi_server
+                .add_api_config(&request.api_name, config, &request.openapi_content)
+                .await
+            {
                 Ok(()) => {
                     info!("Successfully added API configuration: {}", request.api_name);
-                    
+
                     // Also update web state for UI
                     let config_info = aether_web::ConfigInfo {
                         api_name: request.api_name.clone(),
@@ -810,8 +898,13 @@ pub async fn handle_upload_openapi(
                         created_at: chrono::Utc::now(),
                         updated_at: chrono::Utc::now(),
                     };
-                    app_state.web_state.configs.write().await.insert(request.api_name.clone(), config_info);
-                    
+                    app_state
+                        .web_state
+                        .configs
+                        .write()
+                        .await
+                        .insert(request.api_name.clone(), config_info);
+
                     Ok(Json(serde_json::json!({
                         "success": true,
                         "message": format!("API {} configured successfully", request.api_name),
@@ -838,9 +931,7 @@ pub async fn handle_upload_openapi(
 }
 
 /// List all configured APIs
-pub async fn handle_list_apis(
-    State(app_state): State<MultiAppState>,
-) -> Json<Value> {
+pub async fn handle_list_apis(State(app_state): State<MultiAppState>) -> Json<Value> {
     let apis = app_state.multi_server.list_apis().await;
     Json(serde_json::json!({
         "apis": apis
@@ -853,14 +944,12 @@ async fn handle_get_config(
     AxumPath(api_name): AxumPath<String>,
 ) -> Result<Json<Value>, StatusCode> {
     match app_state.multi_server.get_api_config(&api_name).await {
-        Ok((config, openapi_content)) => {
-            Ok(Json(serde_json::json!({
-                "api_name": api_name,
-                "config": config,
-                "openapi_content": openapi_content
-            })))
-        }
-        Err(_) => Err(StatusCode::NOT_FOUND)
+        Ok((config, openapi_content)) => Ok(Json(serde_json::json!({
+            "api_name": api_name,
+            "config": config,
+            "openapi_content": openapi_content
+        }))),
+        Err(_) => Err(StatusCode::NOT_FOUND),
     }
 }
 
@@ -870,17 +959,19 @@ async fn handle_update_config(
     AxumPath(api_name): AxumPath<String>,
     Json(request): Json<UpdateConfigRequest>,
 ) -> Result<Json<Value>, StatusCode> {
-    match app_state.multi_server.update_api_config(
-        &api_name,
-        request.config,
-        &request.openapi_content.unwrap_or_default(),
-    ).await {
-        Ok(()) => {
-            Ok(Json(serde_json::json!({
-                "success": true,
-                "message": format!("Configuration updated for API: {}", api_name)
-            })))
-        }
+    match app_state
+        .multi_server
+        .update_api_config(
+            &api_name,
+            request.config,
+            &request.openapi_content.unwrap_or_default(),
+        )
+        .await
+    {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": format!("Configuration updated for API: {}", api_name)
+        }))),
         Err(e) => {
             error!("Failed to update config for API {}: {}", api_name, e);
             Ok(Json(serde_json::json!({
@@ -900,7 +991,7 @@ async fn handle_delete_api(
         Ok(()) => {
             // Also remove from web state
             app_state.web_state.configs.write().await.remove(&api_name);
-            
+
             Ok(Json(serde_json::json!({
                 "success": true,
                 "message": format!("API {} deleted successfully", api_name)
@@ -917,12 +1008,10 @@ async fn handle_delete_api(
 }
 
 /// Multi-config health check
-pub async fn handle_multi_health(
-    State(app_state): State<MultiAppState>,
-) -> Json<Value> {
+pub async fn handle_multi_health(State(app_state): State<MultiAppState>) -> Json<Value> {
     let apis = app_state.multi_server.list_apis().await;
     let connection_count = app_state.sse_state.connections.read().await.len();
-    
+
     Json(serde_json::json!({
         "status": "healthy",
         "server": "aether-mcp-multi",
@@ -934,9 +1023,7 @@ pub async fn handle_multi_health(
 }
 
 /// Get all API statistics
-pub async fn handle_all_stats(
-    State(app_state): State<MultiAppState>,
-) -> Json<Value> {
+pub async fn handle_all_stats(State(app_state): State<MultiAppState>) -> Json<Value> {
     let stats = app_state.multi_server.get_all_stats().await;
     Json(serde_json::json!(stats))
 }
@@ -962,17 +1049,16 @@ async fn oauth2_callback_redirect(
 ) -> axum::response::Redirect {
     // Build the redirect URL with all query parameters preserved
     let mut redirect_url = "/web/auth/callback".to_string();
-    
+
     if !params.is_empty() {
         let query_string = params
             .iter()
-            .map(|(k, v)| format!("{}={}", k, v))  // Simple format for now, query params should be safe
+            .map(|(k, v)| format!("{}={}", k, v)) // Simple format for now, query params should be safe
             .collect::<Vec<_>>()
             .join("&");
         redirect_url.push('?');
         redirect_url.push_str(&query_string);
     }
-    
+
     axum::response::Redirect::to(&redirect_url)
 }
-

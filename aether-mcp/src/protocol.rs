@@ -1,6 +1,9 @@
 //! MCP protocol message handlers
 
-use aether_core::{types::{Tool, ToolResponse, Authorization}, AetherError};
+use aether_core::{
+    types::{Authorization, Tool, ToolResponse},
+    AetherError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -61,7 +64,7 @@ impl McpResponse {
             error: None,
         }
     }
-    
+
     /// Create an error response
     pub fn error(id: Option<Value>, error: McpError) -> Self {
         Self {
@@ -83,14 +86,14 @@ impl McpError {
             AetherError::Authentication(_) => (-32001, error.to_string()),
             _ => (-32603, error.to_string()),
         };
-        
+
         Self {
             code,
             message,
             data: None,
         }
     }
-    
+
     /// Create a method not found error
     pub fn method_not_found() -> Self {
         Self {
@@ -99,7 +102,7 @@ impl McpError {
             data: None,
         }
     }
-    
+
     /// Create an invalid params error
     pub fn invalid_params(message: &str) -> Self {
         Self {
@@ -112,44 +115,46 @@ impl McpError {
 
 /// Convert tools list to MCP response format
 pub fn tools_to_response(tools: Vec<Tool>) -> Value {
-    let tools_array: Vec<Value> = tools.into_iter()
+    let tools_array: Vec<Value> = tools
+        .into_iter()
         .map(|tool| {
             let mut tool_obj = Map::new();
             tool_obj.insert("name".to_string(), Value::String(tool.name));
             tool_obj.insert("description".to_string(), Value::String(tool.description));
             tool_obj.insert("inputSchema".to_string(), tool.parameters);
-            
+
             if let Some(auth_spec) = tool.auth_spec {
-                tool_obj.insert("authSpec".to_string(), serde_json::to_value(auth_spec).unwrap_or(Value::Null));
+                tool_obj.insert(
+                    "authSpec".to_string(),
+                    serde_json::to_value(auth_spec).unwrap_or(Value::Null),
+                );
             }
-            
+
             Value::Object(tool_obj)
         })
         .collect();
-    
+
     let mut result = Map::new();
     result.insert("tools".to_string(), Value::Array(tools_array));
-    
+
     Value::Object(result)
 }
 
 /// Convert ToolResponse to MCP response format
 pub fn tool_response_to_mcp(response: ToolResponse) -> Value {
     let mut result = Map::new();
-    
+
     if response.is_error {
         result.insert("isError".to_string(), Value::Bool(true));
     }
-    
+
     // Convert content to MCP content format (array of content objects)
-    let content_array = vec![
-        serde_json::json!({
-            "type": "text",
-            "text": serde_json::to_string_pretty(&response.content).unwrap_or_else(|_| response.content.to_string())
-        })
-    ];
-    
+    let content_array = vec![serde_json::json!({
+        "type": "text",
+        "text": serde_json::to_string_pretty(&response.content).unwrap_or_else(|_| response.content.to_string())
+    })];
+
     result.insert("content".to_string(), Value::Array(content_array));
-    
+
     Value::Object(result)
 }

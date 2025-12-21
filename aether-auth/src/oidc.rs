@@ -1,6 +1,6 @@
 //! OIDC/OAuth2.1 validation for Bearer tokens
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -46,7 +46,9 @@ impl From<OidcDiscoveryDocument> for OidcMetadata {
 /// OIDC validator for Bearer tokens
 pub struct OidcValidator {
     issuer_url: String,
+    #[allow(dead_code)]
     client_id: String,
+    #[allow(dead_code)]
     client_secret: String,
     metadata: Arc<RwLock<Option<OidcMetadata>>>,
 }
@@ -204,12 +206,7 @@ mod tests {
         // This test requires a real OIDC provider
         // Set OIDC_ISSUER_URL env var to test
         if let Ok(issuer_url) = std::env::var("OIDC_ISSUER_URL") {
-            let validator = OidcValidator::new(
-                issuer_url,
-                "test-client",
-                "test-secret",
-            )
-            .await;
+            let validator = OidcValidator::new(issuer_url, "test-client", "test-secret").await;
 
             assert!(validator.is_ok());
         }

@@ -25,10 +25,10 @@ impl ApiClient {
             .timeout(timeout.unwrap_or(Duration::from_secs(30)))
             .build()
             .map_err(|e| AetherError::Api(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         Ok(Self { client, base_url })
     }
-    
+
     /// Execute an API call based on operation and parameters
     pub async fn execute_operation(
         &self,
@@ -41,10 +41,10 @@ impl ApiClient {
         debug!("📝 Parameters: {:?}", parameters);
         debug!("🔐 Auth spec provided: {}", auth_spec.is_some());
         debug!("🔑 Authorization provided: {}", authorization.is_some());
-        
+
         // Build the request
         let mut request = self.build_request(operation, parameters)?;
-        
+
         // Apply authentication if required
         if let (Some(auth_spec), Some(authorization)) = (auth_spec, authorization) {
             info!("🔐 Applying authentication to request");
@@ -54,15 +54,17 @@ impl ApiClient {
         } else {
             info!("ℹ️  No authentication to apply");
         }
-        
+
         // Execute the request
-        let response = request.send().await
+        let response = request
+            .send()
+            .await
             .map_err(|e| AetherError::Api(format!("Request failed: {}", e)))?;
-        
+
         // Process the response
         self.process_response(response).await
     }
-    
+
     /// Build an HTTP request from operation and parameters
     fn build_request(
         &self,
@@ -70,20 +72,21 @@ impl ApiClient {
         parameters: &HashMap<String, Value>,
     ) -> Result<reqwest::RequestBuilder> {
         // Parse HTTP method
-        let method = Method::from_bytes(operation.method.as_bytes())
-            .map_err(|e| AetherError::Api(format!("Invalid HTTP method '{}': {}", operation.method, e)))?;
-        
+        let method = Method::from_bytes(operation.method.as_bytes()).map_err(|e| {
+            AetherError::Api(format!("Invalid HTTP method '{}': {}", operation.method, e))
+        })?;
+
         // Build URL with path parameters
         let url = self.build_url(&operation.path, parameters)?;
-        
+
         // Create request builder
         let mut request = self.client.request(method, &url);
-        
+
         // Separate form parameters, body parameters, and other parameters
         let mut form_params = Vec::new();
         let mut body_params = Vec::new();
         let mut other_params = Vec::new();
-        
+
         for param in &operation.parameters {
             match param.param_type.as_str() {
                 "form" => form_params.push(param),
@@ -91,47 +94,49 @@ impl ApiClient {
                 _ => other_params.push(param),
             }
         }
-        
+
         // Apply non-form, non-body parameters first
         for param in other_params {
             if let Some(value) = parameters.get(&param.name) {
                 // Coerce value to expected type based on schema
-                let coerced_value = self.coerce_value_to_schema_type(value, &param.schema, &param.name)?;
+                let coerced_value =
+                    self.coerce_value_to_schema_type(value, &param.schema, &param.name)?;
                 request = self.apply_parameter(request, param, &coerced_value)?;
             } else if param.required {
                 return Err(AetherError::Api(format!(
-                    "Required parameter '{}' not provided", 
+                    "Required parameter '{}' not provided",
                     param.name
                 )));
             }
         }
-        
+
         // Handle body parameters - collect them into a single JSON object
         if !body_params.is_empty() {
             let mut body_json = serde_json::Map::new();
-            
+
             for param in body_params {
                 if let Some(value) = parameters.get(&param.name) {
                     // Coerce value to expected type based on schema
-                    let coerced_value = self.coerce_value_to_schema_type(value, &param.schema, &param.name)?;
+                    let coerced_value =
+                        self.coerce_value_to_schema_type(value, &param.schema, &param.name)?;
                     body_json.insert(param.name.clone(), coerced_value);
                 } else if param.required {
                     return Err(AetherError::Api(format!(
-                        "Required body parameter '{}' not provided", 
+                        "Required body parameter '{}' not provided",
                         param.name
                     )));
                 }
             }
-            
+
             if !body_json.is_empty() {
                 request = request.json(&Value::Object(body_json));
             }
         }
-        
+
         // If we have form parameters, create form-encoded body
         if !form_params.is_empty() {
             let mut form_data = Vec::new();
-            
+
             for param in form_params {
                 let param_value = if let Some(value) = parameters.get(&param.name) {
                     // User provided the parameter
@@ -142,20 +147,20 @@ impl ApiClient {
                         default_value
                     } else if param.required {
                         return Err(AetherError::Api(format!(
-                            "Required form parameter '{}' not provided", 
+                            "Required form parameter '{}' not provided",
                             param.name
                         )));
                     } else {
                         continue; // Skip optional parameters
                     }
                 };
-                
+
                 form_data.push((param.name.clone(), param_value));
             }
-            
+
             request = request.form(&form_data);
         }
-        
+
         debug!("Built request for URL: {}", url);
         Ok(request)
     }
@@ -167,7 +172,7 @@ impl ApiClient {
             if let Some(default_str) = default.as_str() {
                 // Check if default value is an environment variable placeholder
                 if default_str.starts_with("${") && default_str.ends_with("}") {
-                    let env_var = &default_str[2..default_str.len()-1];
+                    let env_var = &default_str[2..default_str.len() - 1];
                     match std::env::var(env_var) {
                         Ok(value) => return Ok(Some(value)),
                         Err(_) => {
@@ -195,14 +200,14 @@ impl ApiClient {
                 return Ok(Some(default_bool.to_string()));
             }
         }
-        
+
         Ok(None)
     }
-    
+
     /// Build URL with path parameters substituted
     fn build_url(&self, path: &str, parameters: &HashMap<String, Value>) -> Result<String> {
         let mut url = format!("{}{}", self.base_url, path);
-        
+
         // Replace path parameters
         for (name, value) in parameters {
             let placeholder = format!("{{{}}}", name);
@@ -216,45 +221,54 @@ impl ApiClient {
                 url = url.replace(&placeholder, &value_str);
             }
         }
-        
+
         Ok(url)
     }
-    
+
     /// Apply a parameter to the request
     fn apply_parameter(
         &self,
-        request: reqwest::RequestBuilder,
+        mut request: reqwest::RequestBuilder,
         param: &Parameter,
         value: &Value,
     ) -> Result<reqwest::RequestBuilder> {
         match param.param_type.as_str() {
-            "query" => {
-                let value_str = self.value_to_string(value);
-                Ok(request.query(&[(param.name.as_str(), value_str)]))
+            "query" => match value {
+                Value::Array(arr) => {
+                    for v in arr {
+                        let v_str = self.value_to_string(v);
+                        request = request.query(&[(param.name.as_str(), v_str)]);
+                    }
+                    Ok(request)
+                }
+                _ => {
+                    let value_str = self.value_to_string(value);
+                    Ok(request.query(&[(param.name.as_str(), value_str)]))
+                }
             },
             "header" => {
                 let value_str = self.value_to_string(value);
                 Ok(request.header(&param.name, value_str))
-            },
+            }
             "body" => {
                 // Body parameters are now handled collectively in build_request
                 Ok(request)
-            },
+            }
             "form" => {
                 // Form parameters are handled in build_request
                 Ok(request)
-            },
+            }
             "path" => {
                 // Path parameters are handled in build_url
                 Ok(request)
-            },
+            }
             _ => {
                 warn!("Unknown parameter type: {}", param.param_type);
                 Ok(request)
             }
         }
     }
-    
+
     /// Convert a JSON value to string for use in headers/query params
     fn value_to_string(&self, value: &Value) -> String {
         match value {
@@ -267,16 +281,24 @@ impl ApiClient {
                     .map(|v| self.value_to_string(v))
                     .collect::<Vec<_>>()
                     .join(",")
-            },
+            }
             _ => value.to_string(),
         }
     }
-    
+
     /// Coerce a JSON value to match the expected schema type
     /// This handles cases where LLMs send numeric values as strings
-    fn coerce_value_to_schema_type(&self, value: &Value, schema: &Value, param_name: &str) -> Result<Value> {
-        let schema_type = schema.get("type").and_then(|t| t.as_str()).unwrap_or("string");
-        
+    fn coerce_value_to_schema_type(
+        &self,
+        value: &Value,
+        schema: &Value,
+        param_name: &str,
+    ) -> Result<Value> {
+        let schema_type = schema
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("string");
+
         match (schema_type, value) {
             // If schema expects integer and we got a string, try to parse it
             ("integer", Value::String(s)) => {
@@ -289,11 +311,13 @@ impl ApiClient {
                 }
                 s.parse::<i64>()
                     .map(|n| Value::Number(n.into()))
-                    .map_err(|_| AetherError::Api(format!(
-                        "Cannot parse '{}' as integer for parameter '{}'",
-                        s, param_name
-                    )))
-            },
+                    .map_err(|_| {
+                        AetherError::Api(format!(
+                            "Cannot parse '{}' as integer for parameter '{}'",
+                            s, param_name
+                        ))
+                    })
+            }
             // If schema expects number and we got a string, try to parse it
             ("number", Value::String(s)) => {
                 if s.is_empty() {
@@ -303,44 +327,72 @@ impl ApiClient {
                     )));
                 }
                 s.parse::<f64>()
-                    .map(|n| serde_json::Number::from_f64(n)
-                        .map(Value::Number)
-                        .unwrap_or_else(|| Value::String(s.clone())))
-                    .map_err(|_| AetherError::Api(format!(
-                        "Cannot parse '{}' as number for parameter '{}'",
-                        s, param_name
-                    )))
-            },
+                    .map(|n| {
+                        serde_json::Number::from_f64(n)
+                            .map(Value::Number)
+                            .unwrap_or_else(|| Value::String(s.clone()))
+                    })
+                    .map_err(|_| {
+                        AetherError::Api(format!(
+                            "Cannot parse '{}' as number for parameter '{}'",
+                            s, param_name
+                        ))
+                    })
+            }
             // If schema expects boolean and we got a string, try to parse it
-            ("boolean", Value::String(s)) => {
-                match s.to_lowercase().as_str() {
-                    "true" | "1" | "yes" => Ok(Value::Bool(true)),
-                    "false" | "0" | "no" => Ok(Value::Bool(false)),
-                    _ => Err(AetherError::Api(format!(
-                        "Cannot parse '{}' as boolean for parameter '{}'",
-                        s, param_name
-                    ))),
-                }
+            ("boolean", Value::String(s)) => match s.to_lowercase().as_str() {
+                "true" | "1" | "yes" => Ok(Value::Bool(true)),
+                "false" | "0" | "no" => Ok(Value::Bool(false)),
+                _ => Err(AetherError::Api(format!(
+                    "Cannot parse '{}' as boolean for parameter '{}'",
+                    s, param_name
+                ))),
             },
+            // If schema expects object and we got a string, try to parse it as JSON
+            ("object", Value::String(s)) => {
+                if s.is_empty() {
+                    return Ok(Value::Object(serde_json::Map::new()));
+                }
+                serde_json::from_str(s).map_err(|e| {
+                    AetherError::Api(format!(
+                        "Cannot parse '{}' as object for parameter '{}': {}",
+                        s, param_name, e
+                    ))
+                })
+            }
+            // If schema expects array and we got a string, try to parse it as JSON
+            ("array", Value::String(s)) => {
+                if s.is_empty() {
+                    return Ok(Value::Array(vec![]));
+                }
+                serde_json::from_str(s).map_err(|e| {
+                    AetherError::Api(format!(
+                        "Cannot parse '{}' as array for parameter '{}': {}",
+                        s, param_name, e
+                    ))
+                })
+            }
             // Value already matches expected type or is compatible
             _ => Ok(value.clone()),
         }
     }
-    
+
     /// Process HTTP response into ToolResponse
     async fn process_response(&self, response: Response) -> Result<ToolResponse> {
         let status = response.status();
         let headers = response.headers().clone();
-        
+
         debug!("Received response with status: {}", status);
-        
+
         // Check if response indicates an error
         let is_error = !status.is_success();
-        
+
         // Get response body
-        let body_text = response.text().await
+        let body_text = response
+            .text()
+            .await
             .map_err(|e| AetherError::Api(format!("Failed to read response body: {}", e)))?;
-        
+
         // Try to parse as JSON, fall back to string
         let content = if body_text.is_empty() {
             Value::Null
@@ -353,12 +405,12 @@ impl ApiClient {
                 }
             }
         };
-        
+
         // Create response with metadata
         let mut response_data = Map::new();
         response_data.insert("status".to_string(), Value::Number(status.as_u16().into()));
         response_data.insert("body".to_string(), content);
-        
+
         // Add headers if they contain useful information
         let mut headers_map = Map::new();
         for (name, value) in headers.iter() {
@@ -369,13 +421,13 @@ impl ApiClient {
         if !headers_map.is_empty() {
             response_data.insert("headers".to_string(), Value::Object(headers_map));
         }
-        
+
         if is_error {
             error!("API request failed with status: {}", status);
         } else {
             info!("API request completed successfully");
         }
-        
+
         Ok(ToolResponse {
             content: Value::Object(response_data),
             is_error,

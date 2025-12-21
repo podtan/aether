@@ -2,20 +2,20 @@
 
 use askama::Template;
 use axum::{
-    extract::{Multipart, State, Query},
+    extract::{Multipart, Query, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
+use openid;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-use tower_sessions::{MemoryStore, SessionManagerLayer, Session};
+use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 use tracing::{error, info};
 use uuid;
-use openid;
 
 use aether_config::AetherConfig;
 
@@ -29,7 +29,9 @@ const STANDALONE_BASE_PATH: &str = "";
 const COMBINED_BASE_PATH: &str = "/web";
 
 mod auth;
-pub use auth::{AuthState, UserInfo, UserRole, get_current_user, AuthCallback, exchange_token_with_pkce};
+pub use auth::{
+    exchange_token_with_pkce, get_current_user, AuthCallback, AuthState, UserInfo, UserRole,
+};
 
 mod mcp_client;
 pub use mcp_client::McpClient;
@@ -56,7 +58,8 @@ pub struct AppStateWithClient {
 pub struct WebState {
     pub configs: Arc<RwLock<HashMap<String, ConfigInfo>>>,
     /// Optional callback to get runtime APIs list
-    pub runtime_apis_callback: Option<Arc<dyn Fn() -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync>>,
+    pub runtime_apis_callback:
+        Option<Arc<dyn Fn() -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync>>,
 }
 
 /// Configuration management state with MCP client
@@ -89,11 +92,8 @@ pub struct ConfigInfo {
 impl AppState {
     pub async fn new(config: &AetherConfig) -> anyhow::Result<Self> {
         let web = WebState::new();
-        let auth = AuthState::new(
-            config.oidc.as_ref(), 
-            config.dev.clone()
-        ).await?;
-        
+        let auth = AuthState::new(config.oidc.as_ref(), config.dev.clone()).await?;
+
         Ok(Self { web, auth })
     }
 }
@@ -101,11 +101,8 @@ impl AppState {
 impl AppStateWithClient {
     pub async fn new(config: &AetherConfig, mcp_url: &str) -> anyhow::Result<Self> {
         let web = WebStateWithClient::new(mcp_url);
-        let auth = AuthState::new(
-            config.oidc.as_ref(), 
-            config.dev.clone()
-        ).await?;
-        
+        let auth = AuthState::new(config.oidc.as_ref(), config.dev.clone()).await?;
+
         Ok(Self { web, auth })
     }
 }
@@ -119,12 +116,13 @@ impl WebState {
     }
 
     /// Create a new WebState with runtime APIs callback
-    pub fn new_with_runtime_apis_callback<F, Fut>(callback: F) -> Self 
+    pub fn new_with_runtime_apis_callback<F, Fut>(callback: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Vec<String>> + Send + 'static,
     {
-        let boxed_callback = move || Box::pin(callback()) as futures::future::BoxFuture<'static, Vec<String>>;
+        let boxed_callback =
+            move || Box::pin(callback()) as futures::future::BoxFuture<'static, Vec<String>>;
         Self {
             configs: Arc::new(RwLock::new(HashMap::new())),
             runtime_apis_callback: Some(Arc::new(boxed_callback)),
@@ -154,7 +152,11 @@ impl IntoResponse for HomeTemplate {
     fn into_response(self) -> Response {
         match self.render() {
             Ok(html) => Html(html).into_response(),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", err)).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Template error: {}", err),
+            )
+                .into_response(),
         }
     }
 }
@@ -183,7 +185,11 @@ impl IntoResponse for LoginTemplate {
     fn into_response(self) -> Response {
         match self.render() {
             Ok(html) => Html(html).into_response(),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", err)).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Template error: {}", err),
+            )
+                .into_response(),
         }
     }
 }
@@ -212,7 +218,11 @@ impl IntoResponse for ApiListTemplate {
     fn into_response(self) -> Response {
         match self.render() {
             Ok(html) => Html(html).into_response(),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", err)).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Template error: {}", err),
+            )
+                .into_response(),
         }
     }
 }
@@ -243,20 +253,28 @@ impl IntoResponse for UploadResultTemplate {
     fn into_response(self) -> Response {
         match self.render() {
             Ok(html) => Html(html).into_response(),
-            Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", err)).into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Template error: {}", err),
+            )
+                .into_response(),
         }
     }
 }
 
 /// Create the web UI router with authentication and MCP client integration
-pub async fn create_router_with_mcp_client(config: &AetherConfig, mcp_url: &str) -> anyhow::Result<Router> {
+pub async fn create_router_with_mcp_client(
+    config: &AetherConfig,
+    mcp_url: &str,
+) -> anyhow::Result<Router> {
     let app_state = AppStateWithClient::new(config, mcp_url).await?;
-    
+
     // Session configuration
-    let session_config = config.session.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("Session configuration is required")
-    })?;
-    
+    let session_config = config
+        .session
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Session configuration is required"))?;
+
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false) // Set to true in production with HTTPS
@@ -267,20 +285,17 @@ pub async fn create_router_with_mcp_client(config: &AetherConfig, mcp_url: &str)
         // Public routes (no authentication required)
         .route("/login", get(login_redirect))
         .route("/health", get(health_check))
-        
         // Auth routes (always public)
         .route("/auth/login", get(auth_login_with_client))
         .route("/auth/oidc/login", post(oidc_login_with_client))
         .route("/auth/dev/login", post(dev_login_with_client))
         .route("/auth/callback", get(auth_callback_with_client))
         .route("/auth/logout", post(auth_logout_with_client))
-        
         // Protected routes (require authentication)
         .route("/", get(home_page_with_client))
-        .route("/ui", get(home_page_with_client))  // Also accessible as /ui
+        .route("/ui", get(home_page_with_client)) // Also accessible as /ui
         .route("/upload", post(handle_upload_openapi_with_client))
         .route("/apis", get(handle_list_apis_with_client))
-        
         .with_state(app_state)
         .layer(middleware::from_fn(auth_middleware_with_client))
         .layer(session_layer);
@@ -290,20 +305,21 @@ pub async fn create_router_with_mcp_client(config: &AetherConfig, mcp_url: &str)
 
 /// Create the web UI router with authentication and multi-config callback
 pub async fn create_router_with_upload_callback<F, Fut>(
-    config: &AetherConfig, 
-    upload_callback: F
-) -> anyhow::Result<Router> 
+    config: &AetherConfig,
+    upload_callback: F,
+) -> anyhow::Result<Router>
 where
     F: Fn(axum::extract::Multipart, Option<UserInfo>) -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = UploadResultTemplate> + Send + 'static,
 {
     let app_state = AppState::new(config).await?;
-    
+
     // Session configuration
-    let session_config = config.session.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("Session configuration is required")
-    })?;
-    
+    let session_config = config
+        .session
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Session configuration is required"))?;
+
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false) // Set to true in production with HTTPS
@@ -325,8 +341,8 @@ where
     // Protected routes (require authentication)
     let protected_routes = Router::new()
         .route("/", get(home_page))
-        .route("/ui", get(home_page))  // Also accessible as /ui
-        .route("/upload", post(upload_handler))  // Use the callback-based handler
+        .route("/ui", get(home_page)) // Also accessible as /ui
+        .route("/upload", post(upload_handler)) // Use the callback-based handler
         .route("/apis", get(handle_list_apis))
         .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -334,13 +350,10 @@ where
         // Public routes (no authentication required)
         .route("/login", get(login_redirect))
         .route("/health", get(health_check))
-        
         // Auth routes (always public)
         .nest("/auth", auth::create_auth_router())
-        
         // Protected routes
         .merge(protected_routes)
-        
         .with_state(app_state)
         .layer(session_layer);
 
@@ -351,27 +364,25 @@ where
 pub async fn create_router_with_existing_web_state<F, Fut>(
     config: &AetherConfig,
     web_state: WebState,
-    upload_callback: F
-) -> anyhow::Result<Router> 
+    upload_callback: F,
+) -> anyhow::Result<Router>
 where
     F: Fn(axum::extract::Multipart, Option<UserInfo>) -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = UploadResultTemplate> + Send + 'static,
 {
-    let auth = AuthState::new(
-        config.oidc.as_ref(), 
-        config.dev.clone()
-    ).await?;
-    
+    let auth = AuthState::new(config.oidc.as_ref(), config.dev.clone()).await?;
+
     let app_state = AppState {
         web: web_state,
         auth,
     };
-    
+
     // Session configuration
-    let session_config = config.session.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("Session configuration is required")
-    })?;
-    
+    let session_config = config
+        .session
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Session configuration is required"))?;
+
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false) // Set to true in production with HTTPS
@@ -393,8 +404,8 @@ where
     // Protected routes (require authentication)
     let protected_routes = Router::new()
         .route("/", get(home_page))
-        .route("/ui", get(home_page))  // Also accessible as /ui
-        .route("/upload", post(upload_handler))  // Use the callback-based handler
+        .route("/ui", get(home_page)) // Also accessible as /ui
+        .route("/upload", post(upload_handler)) // Use the callback-based handler
         .route("/apis", get(handle_list_apis))
         .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -402,13 +413,10 @@ where
         // Public routes (no authentication required)
         .route("/login", get(login_redirect))
         .route("/health", get(health_check))
-        
         // Auth routes (always public)
         .nest("/auth", auth::create_auth_router())
-        
         // Protected routes
         .merge(protected_routes)
-        
         .with_state(app_state)
         .layer(session_layer);
 
@@ -445,32 +453,48 @@ async fn handle_upload_openapi(
     // Process multipart form data
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or_default();
-        
+
         match name {
-            "api_name" => {
-                match field.text().await {
-                    Ok(text) => api_name = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read API name".to_string(), user),
+            "api_name" => match field.text().await {
+                Ok(text) => api_name = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read API name".to_string(),
+                        user,
+                    )
                 }
-            }
-            "base_url" => {
-                match field.text().await {
-                    Ok(text) => base_url = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read base URL".to_string(), user),
+            },
+            "base_url" => match field.text().await {
+                Ok(text) => base_url = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read base URL".to_string(),
+                        user,
+                    )
                 }
-            }
-            "openapi_file" => {
-                match field.text().await {
-                    Ok(text) => openapi_content = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read OpenAPI file".to_string(), user),
+            },
+            "openapi_file" => match field.text().await {
+                Ok(text) => openapi_content = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read OpenAPI file".to_string(),
+                        user,
+                    )
                 }
-            }
+            },
             _ => {}
         }
     }
 
     if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return UploadResultTemplate::new_standalone(false, "Missing required fields".to_string(), user);
+        return UploadResultTemplate::new_standalone(
+            false,
+            "Missing required fields".to_string(),
+            user,
+        );
     }
 
     // Generate config using existing generator
@@ -478,34 +502,43 @@ async fn handle_upload_openapi(
         &openapi_content,
         &api_name,
         &base_url,
-    ).await {
-        Ok(config) => {
-            match serde_yaml::to_string(&config) {
-                Ok(config_yaml) => {
-                    let config_info = ConfigInfo {
-                        api_name: api_name.clone(),
-                        openapi_content,
-                        config_content: config_yaml,
-                        base_url,
-                        created_at: chrono::Utc::now(),
-                        updated_at: chrono::Utc::now(),
-                    };
+    )
+    .await
+    {
+        Ok(config) => match serde_yaml::to_string(&config) {
+            Ok(config_yaml) => {
+                let config_info = ConfigInfo {
+                    api_name: api_name.clone(),
+                    openapi_content,
+                    config_content: config_yaml,
+                    base_url,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                };
 
-                    app_state.web.configs.write().await.insert(api_name.clone(), config_info);
-                    info!("Generated config for API: {}", api_name);
+                app_state
+                    .web
+                    .configs
+                    .write()
+                    .await
+                    .insert(api_name.clone(), config_info);
+                info!("Generated config for API: {}", api_name);
 
-                    UploadResultTemplate::new_standalone(
-                        true,
-                        format!("Successfully generated config for API: {}", api_name),
-                        user,
-                    )
-                }
-                Err(e) => {
-                    error!("Failed to serialize config: {}", e);
-                    UploadResultTemplate::new_standalone(false, "Failed to serialize configuration".to_string(), user)
-                }
+                UploadResultTemplate::new_standalone(
+                    true,
+                    format!("Successfully generated config for API: {}", api_name),
+                    user,
+                )
             }
-        }
+            Err(e) => {
+                error!("Failed to serialize config: {}", e);
+                UploadResultTemplate::new_standalone(
+                    false,
+                    "Failed to serialize configuration".to_string(),
+                    user,
+                )
+            }
+        },
         Err(e) => {
             error!("Failed to generate config: {}", e);
             UploadResultTemplate::new_standalone(
@@ -525,14 +558,14 @@ async fn handle_list_apis(
     let user = auth::get_current_user(session).await;
     let web_configs = app_state.web.configs.read().await;
     let mut configs_vec: Vec<ConfigInfo> = web_configs.values().cloned().collect();
-    
+
     // If we have a runtime APIs callback, also include APIs from there
     if let Some(callback) = &app_state.web.runtime_apis_callback {
         match callback().await {
             runtime_apis => {
                 let runtime_apis_count = runtime_apis.len();
                 info!("Found {} runtime APIs from callback", runtime_apis_count);
-                
+
                 // Add runtime APIs that aren't already in the web configs
                 for api_name in runtime_apis {
                     if !web_configs.contains_key(&api_name) {
@@ -541,21 +574,25 @@ async fn handle_list_apis(
                         let config_info = ConfigInfo {
                             api_name: api_name.clone(),
                             openapi_content: "".to_string(), // Could be loaded from multi-server if needed
-                            config_content: "".to_string(),  // Could be loaded from multi-server if needed
-                            base_url: "".to_string(),        // Could be extracted from config if needed
-                            created_at: chrono::Utc::now(),  // We don't have the actual creation time
+                            config_content: "".to_string(), // Could be loaded from multi-server if needed
+                            base_url: "".to_string(), // Could be extracted from config if needed
+                            created_at: chrono::Utc::now(), // We don't have the actual creation time
                             updated_at: chrono::Utc::now(),
                         };
                         configs_vec.push(config_info);
                     }
                 }
-                
-                info!("Total APIs to display: {} (web: {}, runtime: {})", 
-                      configs_vec.len(), web_configs.len(), runtime_apis_count);
+
+                info!(
+                    "Total APIs to display: {} (web: {}, runtime: {})",
+                    configs_vec.len(),
+                    web_configs.len(),
+                    runtime_apis_count
+                );
             }
         }
     }
-    
+
     ApiListTemplate::new_standalone(configs_vec, user)
 }
 
@@ -570,7 +607,7 @@ pub fn render_home(user: Option<&UserInfo>) -> HomeTemplate {
 pub async fn render_apis(web_state: &WebState, user: Option<&UserInfo>) -> ApiListTemplate {
     let web_configs = web_state.configs.read().await;
     let mut configs_vec: Vec<ConfigInfo> = web_configs.values().cloned().collect();
-    
+
     // If we have a runtime APIs callback, also include APIs from there
     if let Some(callback) = &web_state.runtime_apis_callback {
         match callback().await {
@@ -593,7 +630,7 @@ pub async fn render_apis(web_state: &WebState, user: Option<&UserInfo>) -> ApiLi
             }
         }
     }
-    
+
     ApiListTemplate::new_standalone(configs_vec, user.cloned())
 }
 
@@ -604,8 +641,8 @@ pub async fn handle_upload_with_multi_server<F, Fut>(
     web_state: &WebState,
     user: Option<UserInfo>,
     add_config_fn: F,
-) -> UploadResultTemplate 
-where 
+) -> UploadResultTemplate
+where
     F: FnOnce(String, aether_config::AetherConfig, String) -> Fut,
     Fut: std::future::Future<Output = Result<(), String>>,
 {
@@ -613,43 +650,55 @@ where
     let mut base_url = String::new();
     let mut openapi_content = String::new();
 
-    // Process multipart form data  
+    // Process multipart form data
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or_default();
-        
+
         match name {
-            "api_name" => {
-                match field.text().await {
-                    Ok(text) => api_name = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read API name".to_string(), user),
+            "api_name" => match field.text().await {
+                Ok(text) => api_name = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read API name".to_string(),
+                        user,
+                    )
                 }
-            }
-            "base_url" => {
-                match field.text().await {
-                    Ok(text) => base_url = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read base URL".to_string(), user),
+            },
+            "base_url" => match field.text().await {
+                Ok(text) => base_url = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read base URL".to_string(),
+                        user,
+                    )
                 }
-            }
-            "openapi_file" => {
-                match field.text().await {
-                    Ok(text) => openapi_content = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read OpenAPI file".to_string(), user),
+            },
+            "openapi_file" => match field.text().await {
+                Ok(text) => openapi_content = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read OpenAPI file".to_string(),
+                        user,
+                    )
                 }
-            }
+            },
             _ => {}
         }
     }
 
     if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return UploadResultTemplate::new_standalone(false, "Missing required fields".to_string(), user);
+        return UploadResultTemplate::new_standalone(
+            false,
+            "Missing required fields".to_string(),
+            user,
+        );
     }
 
     // Generate config using existing generator
-    match generator::generate_config_from_openapi(
-        &openapi_content,
-        &api_name,
-        &base_url,
-    ).await {
+    match generator::generate_config_from_openapi(&openapi_content, &api_name, &base_url).await {
         Ok(config) => {
             // Add to multi-server using the provided callback
             info!("🔄 Calling multi-server callback for API: {}", api_name);
@@ -662,13 +711,17 @@ where
                             let config_info = ConfigInfo {
                                 api_name: api_name.clone(),
                                 openapi_content,
-                                config_content: config_yaml,  
+                                config_content: config_yaml,
                                 base_url,
                                 created_at: chrono::Utc::now(),
                                 updated_at: chrono::Utc::now(),
                             };
 
-                            web_state.configs.write().await.insert(api_name.clone(), config_info);
+                            web_state
+                                .configs
+                                .write()
+                                .await
+                                .insert(api_name.clone(), config_info);
                             info!("Generated config for API: {}", api_name);
 
                             UploadResultTemplate::new_standalone(
@@ -679,12 +732,19 @@ where
                         }
                         Err(e) => {
                             error!("Failed to serialize config: {}", e);
-                            UploadResultTemplate::new_standalone(false, "Failed to serialize configuration".to_string(), user)
+                            UploadResultTemplate::new_standalone(
+                                false,
+                                "Failed to serialize configuration".to_string(),
+                                user,
+                            )
                         }
                     }
                 }
                 Err(e) => {
-                    error!("❌ Multi-server callback failed for API {}: {}", api_name, e);
+                    error!(
+                        "❌ Multi-server callback failed for API {}: {}",
+                        api_name, e
+                    );
                     UploadResultTemplate::new_standalone(
                         false,
                         format!("Failed to configure API: {}", e),
@@ -717,36 +777,57 @@ async fn handle_upload_openapi_with_client(
     // Process multipart form data
     while let Ok(Some(field)) = multipart.next_field().await {
         let name = field.name().unwrap_or_default();
-        
+
         match name {
-            "api_name" => {
-                match field.text().await {
-                    Ok(text) => api_name = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read API name".to_string(), user),
+            "api_name" => match field.text().await {
+                Ok(text) => api_name = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read API name".to_string(),
+                        user,
+                    )
                 }
-            }
-            "base_url" => {
-                match field.text().await {
-                    Ok(text) => base_url = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read base URL".to_string(), user),
+            },
+            "base_url" => match field.text().await {
+                Ok(text) => base_url = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read base URL".to_string(),
+                        user,
+                    )
                 }
-            }
-            "openapi_file" => {
-                match field.text().await {
-                    Ok(text) => openapi_content = text,
-                    Err(_) => return UploadResultTemplate::new_standalone(false, "Failed to read OpenAPI file".to_string(), user),
+            },
+            "openapi_file" => match field.text().await {
+                Ok(text) => openapi_content = text,
+                Err(_) => {
+                    return UploadResultTemplate::new_standalone(
+                        false,
+                        "Failed to read OpenAPI file".to_string(),
+                        user,
+                    )
                 }
-            }
+            },
             _ => {}
         }
     }
 
     if api_name.is_empty() || base_url.is_empty() || openapi_content.is_empty() {
-        return UploadResultTemplate::new_standalone(false, "Missing required fields".to_string(), user);
+        return UploadResultTemplate::new_standalone(
+            false,
+            "Missing required fields".to_string(),
+            user,
+        );
     }
 
     // Call MCP admin API to upload the configuration
-    match app_state.web.mcp_client.upload_openapi(&api_name, &base_url, &openapi_content).await {
+    match app_state
+        .web
+        .mcp_client
+        .upload_openapi(&api_name, &base_url, &openapi_content)
+        .await
+    {
         Ok(response) => {
             if response.success {
                 // Also update local web state for UI
@@ -759,16 +840,29 @@ async fn handle_upload_openapi_with_client(
                     updated_at: chrono::Utc::now(),
                 };
 
-                app_state.web.configs.write().await.insert(api_name.clone(), config_info);
+                app_state
+                    .web
+                    .configs
+                    .write()
+                    .await
+                    .insert(api_name.clone(), config_info);
                 info!("Successfully uploaded config for API: {}", api_name);
 
                 UploadResultTemplate::new_standalone(
                     true,
-                    response.message.unwrap_or_else(|| format!("Successfully configured API: {}", api_name)),
+                    response
+                        .message
+                        .unwrap_or_else(|| format!("Successfully configured API: {}", api_name)),
                     user,
                 )
             } else {
-                UploadResultTemplate::new_standalone(false, response.error.unwrap_or_else(|| "Upload failed".to_string()), user)
+                UploadResultTemplate::new_standalone(
+                    false,
+                    response
+                        .error
+                        .unwrap_or_else(|| "Upload failed".to_string()),
+                    user,
+                )
             }
         }
         Err(e) => {
@@ -789,15 +883,15 @@ async fn handle_list_apis_with_client(
 ) -> impl IntoResponse {
     let user = auth::get_current_user(session).await;
     let mut configs_vec: Vec<ConfigInfo> = Vec::new();
-    
+
     // Get APIs from MCP service
     match app_state.web.mcp_client.list_apis().await {
         Ok(runtime_apis) => {
             info!("Found {} APIs from MCP service", runtime_apis.len());
-            
+
             // Load local web state configs
             let web_configs = app_state.web.configs.read().await;
-            
+
             // Merge runtime APIs with local state
             for api_name in runtime_apis {
                 if let Some(local_config) = web_configs.get(&api_name) {
@@ -816,7 +910,7 @@ async fn handle_list_apis_with_client(
                     configs_vec.push(config_info);
                 }
             }
-            
+
             info!("Total APIs to display: {}", configs_vec.len());
         }
         Err(e) => {
@@ -826,7 +920,7 @@ async fn handle_list_apis_with_client(
             configs_vec = web_configs.values().cloned().collect();
         }
     }
-    
+
     ApiListTemplate::new_standalone(configs_vec, user)
 }
 /// Main dashboard page for client-based app
@@ -842,14 +936,18 @@ async fn auth_middleware_with_client(
     next: Next,
 ) -> Result<Response, Response> {
     let path = request.uri().path();
-    
+
     // Allow public routes
     if path.starts_with("/auth/") || path == "/login" || path == "/health" {
         return Ok(next.run(request).await);
     }
-    
+
     // Check if user is authenticated
-    if let Some(_user_info) = session.get::<auth::UserInfo>("user_info").await.unwrap_or(None) {
+    if let Some(_user_info) = session
+        .get::<auth::UserInfo>("user_info")
+        .await
+        .unwrap_or(None)
+    {
         Ok(next.run(request).await)
     } else {
         Err(Redirect::to("/login").into_response())
@@ -861,10 +959,7 @@ async fn auth_login_with_client(
     State(app_state): State<AppStateWithClient>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    LoginTemplate::new_standalone(
-        app_state.auth.is_dev_mode(),
-        params.get("error").cloned(),
-    )
+    LoginTemplate::new_standalone(app_state.auth.is_dev_mode(), params.get("error").cloned())
 }
 
 /// Callback handler for client-based app  
@@ -880,21 +975,25 @@ async fn auth_callback_with_client(
                 // State is valid, get the PKCE verifier
                 match session.get::<String>("pkce_verifier").await {
                     Ok(Some(code_verifier)) => {
-                        tracing::debug!("OAuth state verified, exchanging code for token with PKCE");
-                        
+                        tracing::debug!(
+                            "OAuth state verified, exchanging code for token with PKCE"
+                        );
+
                         // Perform token exchange with PKCE
-                        match exchange_token_with_pkce(oidc_client, &callback.code, &code_verifier).await {
+                        match exchange_token_with_pkce(oidc_client, &callback.code, &code_verifier)
+                            .await
+                        {
                             Ok(user_info) => {
                                 // Store user info in session
                                 if let Err(e) = session.insert("user_info", &user_info).await {
                                     tracing::warn!("Failed to store user info in session: {}", e);
                                     return Redirect::to("/login?error=session_error");
                                 }
-                                
+
                                 // Clean up session data
                                 let _ = session.remove::<String>("oauth_state").await;
                                 let _ = session.remove::<String>("pkce_verifier").await;
-                                
+
                                 tracing::info!("User {} logged in successfully", user_info.email);
                                 return Redirect::to("/ui");
                             }
@@ -928,24 +1027,22 @@ async fn auth_callback_with_client(
             }
         }
     }
-    
+
     // Fallback error - OIDC client not available
     tracing::warn!("OIDC client not available for callback");
     Redirect::to("/login?error=oidc_not_configured")
 }
 
 /// Logout handler for client-based app
-async fn auth_logout_with_client(
-    session: Session,
-) -> impl IntoResponse {
+async fn auth_logout_with_client(session: Session) -> impl IntoResponse {
     // Remove user from session
     if let Err(e) = session.remove::<auth::UserInfo>("user_info").await {
         tracing::warn!("Failed to remove user from session during logout: {}", e);
     }
-    
+
     // Clear session - this method doesn't return a Result
     session.clear().await;
-    
+
     Redirect::to("/login")
 }
 
@@ -957,35 +1054,42 @@ async fn oidc_login_with_client(
     if let Some(oidc_client) = &app_state.auth.oidc_client {
         // Generate a random state for CSRF protection
         let state = uuid::Uuid::new_v4().to_string();
-        
+
         // Generate PKCE parameters
         let pkce_params = auth::PkceParams::new();
-        
+
         // Store the state and PKCE verifier in the session
         if let Err(e) = session.insert("oauth_state", &state).await {
             tracing::warn!("Failed to store OAuth state in session: {}", e);
             return Redirect::to("/login?error=session_error");
         }
-        
-        if let Err(e) = session.insert("pkce_verifier", &pkce_params.code_verifier).await {
+
+        if let Err(e) = session
+            .insert("pkce_verifier", &pkce_params.code_verifier)
+            .await
+        {
             tracing::warn!("Failed to store PKCE verifier in session: {}", e);
             return Redirect::to("/login?error=session_error");
         }
-        
+
         // Manually build the authorization URL with PKCE parameters
         let auth_url = oidc_client.auth_url(&openid::Options {
             scope: Some("openid email profile".to_string()),
             state: Some(state),
             ..Default::default()
         });
-        
+
         // Add PKCE parameters to the URL
         let mut url_with_pkce = auth_url.clone();
-        url_with_pkce.query_pairs_mut()
+        url_with_pkce
+            .query_pairs_mut()
             .append_pair("code_challenge", &pkce_params.code_challenge)
             .append_pair("code_challenge_method", "S256");
-        
-        tracing::debug!("Redirecting to OIDC authorization URL with PKCE: {}", url_with_pkce);
+
+        tracing::debug!(
+            "Redirecting to OIDC authorization URL with PKCE: {}",
+            url_with_pkce
+        );
         Redirect::to(&url_with_pkce.to_string())
     } else {
         // OIDC client not available, redirect with error
@@ -1005,23 +1109,23 @@ async fn dev_login_with_client(
                 sub: "dev_user".to_string(),
                 email: dev_config.local_dev_email.clone(),
                 name: dev_config.local_dev_name.clone(),
-                role: if dev_config.local_dev_role == "admin" { 
-                    auth::UserRole::Admin 
-                } else { 
-                    auth::UserRole::User 
+                role: if dev_config.local_dev_role == "admin" {
+                    auth::UserRole::Admin
+                } else {
+                    auth::UserRole::User
                 },
             };
-            
+
             // Store user info in session
             if let Err(e) = session.insert("user_info", &user_info).await {
                 tracing::warn!("Failed to store dev user info in session: {}", e);
                 return Redirect::to("/login?error=session_error");
             }
-            
+
             info!("Dev user {} logged in successfully", user_info.email);
             return Redirect::to("/ui");
         }
     }
-    
+
     Redirect::to("/login?error=dev_mode_disabled")
 }

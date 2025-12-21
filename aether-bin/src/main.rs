@@ -1,16 +1,16 @@
 //! Aether - Dynamic API to MCP Bridge
-//! 
+//!
 //! A Rust-based application for dynamically exposing external RESTful APIs
 //! as Model Context Protocol (MCP) endpoints.
 
 use aether_config::AetherConfig;
 use aether_mcp::{server, MultiConfigServer, MultiConfigTransport};
 use clap::{Arg, Command};
+use dotenv;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use dotenv;
-use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // It's okay if .env file doesn't exist, just log it at debug level
         eprintln!("Note: .env file not found or could not be loaded: {}", e);
     }
-    
+
     // Parse command line arguments
     let matches = Command::new("aether")
         .version(env!("CARGO_PKG_VERSION"))
@@ -30,14 +30,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("config")
                 .value_name("FILE")
                 .help("Configuration file path")
-                .default_value("config.yaml")
+                .default_value("config.yaml"),
         )
         .arg(
             Arg::new("log-level")
                 .long("log-level")
                 .value_name("LEVEL")
                 .help("Log level (trace, debug, info, warn, error)")
-                .default_value("info")
+                .default_value("info"),
         )
         .arg(
             Arg::new("port")
@@ -45,36 +45,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("port")
                 .value_name("PORT")
                 .help("HTTP server port")
-                .default_value("9000")
+                .default_value("9000"),
         )
         .arg(
             Arg::new("host")
                 .long("host")
                 .value_name("HOST")
                 .help("HTTP server host")
-                .default_value("127.0.0.1")
+                .default_value("127.0.0.1"),
         )
         .arg(
             Arg::new("stdio")
                 .long("stdio")
                 .action(clap::ArgAction::SetTrue)
-                .help("Use stdio transport instead of HTTP")
+                .help("Use stdio transport instead of HTTP"),
         )
         .arg(
             Arg::new("multi-config")
                 .long("multi-config")
                 .action(clap::ArgAction::SetTrue)
-                .help("Use multi-config mode with directory-based configuration")
+                .help("Use multi-config mode with directory-based configuration"),
         )
         .arg(
             Arg::new("configs-dir")
                 .long("configs-dir")
                 .value_name("DIR")
                 .help("Directory containing API configurations (for multi-config mode)")
-                .default_value("configs")
+                .default_value("configs"),
         )
         .get_matches();
-    
+
     // Initialize logging
     let log_level = matches.get_one::<String>("log-level").unwrap();
     let log_filter = match log_level.as_str() {
@@ -88,13 +88,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
-    
+
     // Check if multi-config mode is requested
     let use_multi_config = matches.get_flag("multi-config");
-    
+
     // Check if stdio mode is requested (determine early for logging setup)
     let use_stdio = matches.get_flag("stdio");
-    
+
     if use_stdio {
         // In stdio mode, all logs must go to stderr to avoid interfering with JSON-RPC on stdout
         tracing_subscriber::registry()
@@ -124,37 +124,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with(tracing_subscriber::fmt::layer().with_target(false))
             .init();
     }
-    
+
     info!("Starting Aether v{}", env!("CARGO_PKG_VERSION"));
-    
+
     if use_multi_config {
         // Multi-config mode
         let configs_dir = matches.get_one::<String>("configs-dir").unwrap();
-        info!("Starting in multi-config mode with directory: {}", configs_dir);
-        
+        info!(
+            "Starting in multi-config mode with directory: {}",
+            configs_dir
+        );
+
         if use_stdio {
             error!("Multi-config mode is not compatible with stdio transport");
             std::process::exit(1);
         }
-        
+
         // Parse host and port for HTTP mode
         let host = matches.get_one::<String>("host").unwrap();
-        let port = matches.get_one::<String>("port").unwrap()
+        let port = matches
+            .get_one::<String>("port")
+            .unwrap()
             .parse::<u16>()
             .unwrap_or_else(|_| {
                 error!("Invalid port number");
                 std::process::exit(1);
             });
-        
-        let bind_addr: SocketAddr = format!("{}:{}", host, port)
-            .parse()
-            .unwrap_or_else(|_| {
-                error!("Invalid host:port combination");
-                std::process::exit(1);
-            });
-        
+
+        let bind_addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap_or_else(|_| {
+            error!("Invalid host:port combination");
+            std::process::exit(1);
+        });
+
         info!("Starting Multi-Config MCP server on {}", bind_addr);
-        
+
         // Start pure multi-config server (no web integration)
         let multi_server = match MultiConfigServer::new(configs_dir).await {
             Ok(server) => server,
@@ -198,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if use_stdio {
             info!("Starting MCP server with stdio transport");
-            
+
             // Start the MCP stdio server
             if let Err(e) = server::start_stdio_server(config).await {
                 error!("Server error: {}", e);
@@ -207,22 +210,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             // Parse host and port for HTTP mode
             let host = matches.get_one::<String>("host").unwrap();
-            let port = matches.get_one::<String>("port").unwrap()
+            let port = matches
+                .get_one::<String>("port")
+                .unwrap()
                 .parse::<u16>()
                 .unwrap_or_else(|_| {
                     error!("Invalid port number");
                     std::process::exit(1);
                 });
-            
-            let bind_addr: SocketAddr = format!("{}:{}", host, port)
-                .parse()
-                .unwrap_or_else(|_| {
-                    error!("Invalid host:port combination");
-                    std::process::exit(1);
-                });
-            
+
+            let bind_addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap_or_else(|_| {
+                error!("Invalid host:port combination");
+                std::process::exit(1);
+            });
+
             info!("Starting MCP server with HTTP transport on {}", bind_addr);
-            
+
             // Start the MCP SSE server only (no web integration)
             if let Err(e) = server::start_sse_server(config, bind_addr).await {
                 error!("Server error: {}", e);
@@ -230,8 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     info!("Aether stopped");
     Ok(())
 }
-

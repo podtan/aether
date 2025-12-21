@@ -24,9 +24,14 @@ pub struct AuthSpec {
 #[serde(rename_all = "snake_case")]
 pub enum AuthType {
     Bearer,
-    ApiKey { location: ApiKeyLocation, name: String },
+    ApiKey {
+        location: ApiKeyLocation,
+        name: String,
+    },
     Basic,
-    Custom { headers: HashMap<String, String> },
+    Custom {
+        headers: HashMap<String, String>,
+    },
 }
 
 /// Location for API key authentication

@@ -4,12 +4,12 @@ use aether_auth::OidcValidator;
 use aether_config::{McpAuthConfig, OidcConfig};
 use axum::{
     extract::State,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
-use tracing::{debug, warn, info};
+use tracing::{debug, info, warn};
 
 /// Shared state for auth middleware
 #[derive(Clone)]
@@ -28,17 +28,10 @@ impl AuthMiddlewareState {
                 anyhow::anyhow!("[oidc] config required when mcp_auth.enabled=true")
             })?;
 
-            let issuer = config
-                .issuer_url
-                .as_deref()
-                .unwrap_or(&oidc.issuer_url);
+            let issuer = config.issuer_url.as_deref().unwrap_or(&oidc.issuer_url);
 
-            let validator = OidcValidator::new(
-                issuer,
-                &oidc.client_id,
-                &oidc.client_secret,
-            )
-            .await?;
+            let validator =
+                OidcValidator::new(issuer, &oidc.client_id, &oidc.client_secret).await?;
 
             Some(Arc::new(validator))
         } else {
@@ -73,9 +66,7 @@ pub async fn mcp_auth_middleware(
             match header_value.strip_prefix("Bearer ") {
                 Some(token) => token,
                 None => {
-                    warn!(
-                        "Invalid Authorization header format (expected 'Bearer <token>')"
-                    );
+                    warn!("Invalid Authorization header format (expected 'Bearer <token>')");
                     if auth_state.config.require_auth {
                         return Err(StatusCode::UNAUTHORIZED);
                     } else {

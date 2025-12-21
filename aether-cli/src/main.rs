@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -19,19 +19,19 @@ enum Commands {
         /// Path to OpenAPI specification file
         #[arg(short, long)]
         input: PathBuf,
-        
+
         /// Path to output Aether configuration file
         #[arg(short, long)]
         output: PathBuf,
-        
+
         /// API server URL for config generation (default: http://localhost:8000)
         #[arg(long, default_value = "http://localhost:8000")]
         server: String,
-        
+
         /// API name to use in the generated config
         #[arg(short, long)]
         api_name: String,
-        
+
         /// Base URL for the API being configured (optional - will use OpenAPI servers if not provided)
         #[arg(short, long)]
         base_url: Option<String>,
@@ -48,7 +48,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::GenerateConfig { input, output, server, api_name, base_url } => {
+        Commands::GenerateConfig {
+            input,
+            output,
+            server,
+            api_name,
+            base_url,
+        } => {
             generate_config(input, output, server, api_name, base_url).await?;
         }
     }
@@ -88,7 +94,7 @@ async fn generate_config(
 
     // Create HTTP client
     let client = reqwest::Client::new();
-    
+
     // Prepare the request payload
     let payload = serde_json::json!({
         "openapi_content": openapi_content,
@@ -110,7 +116,10 @@ async fn generate_config(
     }
 
     let generated_config = response.text().await?;
-    info!("✅ Received generated config ({} bytes)", generated_config.len());
+    info!(
+        "✅ Received generated config ({} bytes)",
+        generated_config.len()
+    );
 
     // Write the generated config to output file
     tokio::fs::write(output_path, generated_config).await?;

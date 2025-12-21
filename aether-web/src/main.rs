@@ -5,13 +5,13 @@
 
 use aether_config::AetherConfig;
 use aether_web;
+use axum::Router;
 use clap::{Arg, Command};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tower_http::cors::CorsLayer;
-use axum::Router;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,14 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("config")
                 .value_name("FILE")
                 .help("Web configuration file path")
-                .default_value("/opt/aether/web/config.toml")
+                .default_value("/opt/aether/web/config.toml"),
         )
         .arg(
             Arg::new("log-level")
                 .long("log-level")
                 .value_name("LEVEL")
                 .help("Log level (trace, debug, info, warn, error)")
-                .default_value("info")
+                .default_value("info"),
         )
         .arg(
             Arg::new("port")
@@ -40,21 +40,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .long("port")
                 .value_name("PORT")
                 .help("HTTP server port")
-                .default_value("9001")
+                .default_value("9001"),
         )
         .arg(
             Arg::new("host")
                 .long("host")
                 .value_name("HOST")
                 .help("HTTP server host")
-                .default_value("0.0.0.0")
+                .default_value("0.0.0.0"),
         )
         .arg(
             Arg::new("mcp-url")
                 .long("mcp-url")
                 .value_name("URL")
                 .help("MCP service base URL for admin API calls")
-                .default_value("http://localhost:9000")
+                .default_value("http://localhost:9000"),
         )
         .get_matches();
 
@@ -74,11 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| {
-                    tracing_subscriber::EnvFilter::new(format!("aether_web={},aether_config={},aether_auth={}", 
-                        log_level, log_level, log_level))
-                })
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(format!(
+                    "aether_web={},aether_config={},aether_auth={}",
+                    log_level, log_level, log_level
+                ))
+            }),
         )
         .with(tracing_subscriber::fmt::layer().with_target(false))
         .init();
@@ -90,7 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = match AetherConfig::load_toml_from_file(&config_path).await {
         Ok(config) => config,
         Err(e) => {
-            error!("Failed to load web configuration from {:?}: {}", config_path, e);
+            error!(
+                "Failed to load web configuration from {:?}: {}",
+                config_path, e
+            );
             std::process::exit(1);
         }
     };
@@ -99,19 +103,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Parse host and port
     let host = matches.get_one::<String>("host").unwrap();
-    let port = matches.get_one::<String>("port").unwrap()
+    let port = matches
+        .get_one::<String>("port")
+        .unwrap()
         .parse::<u16>()
         .unwrap_or_else(|_| {
             error!("Invalid port number");
             std::process::exit(1);
         });
 
-    let bind_addr: SocketAddr = format!("{}:{}", host, port)
-        .parse()
-        .unwrap_or_else(|_| {
-            error!("Invalid host:port combination");
-            std::process::exit(1);
-        });
+    let bind_addr: SocketAddr = format!("{}:{}", host, port).parse().unwrap_or_else(|_| {
+        error!("Invalid host:port combination");
+        std::process::exit(1);
+    });
 
     let mcp_url = matches.get_one::<String>("mcp-url").unwrap();
     info!("MCP service URL: {}", mcp_url);

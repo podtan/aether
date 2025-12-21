@@ -1,14 +1,17 @@
 //! Configuration management for Aether
 
-use aether_core::{types::{ToolConfig, AuthSpec, AuthType, EnhancedToolConfig}, AetherError, Result};
+use aether_core::{
+    types::{AuthSpec, AuthType, EnhancedToolConfig, ToolConfig},
+    AetherError, Result,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
-pub mod openapi;
-pub mod generator;
 pub mod directory;
+pub mod generator;
+pub mod openapi;
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,14 +156,15 @@ impl McpAuthConfig {
             if oidc_config.is_none() {
                 return Err(AetherError::Configuration(
                     "[mcp_auth] enabled=true requires [oidc] configuration. \
-                     See docs/oauth2/CLIENTS.md for setup instructions.".to_string()
+                     See docs/oauth2/CLIENTS.md for setup instructions."
+                        .to_string(),
                 ));
             }
         }
 
         if self.require_auth && !self.enabled {
             return Err(AetherError::Configuration(
-                "[mcp_auth] require_auth=true requires enabled=true".to_string()
+                "[mcp_auth] require_auth=true requires enabled=true".to_string(),
             ));
         }
 
@@ -180,33 +184,38 @@ impl ApiAuthentication {
                         let resolved_value = Self::resolve_env_var(value)?;
                         resolved_headers.insert(key.clone(), resolved_value);
                     }
-                    AuthType::Custom { headers: resolved_headers }
+                    AuthType::Custom {
+                        headers: resolved_headers,
+                    }
                 } else {
                     return Err(AetherError::Configuration(
-                        "Custom authentication requires headers".to_string()
+                        "Custom authentication requires headers".to_string(),
                     ));
                 }
-            },
+            }
             "bearer" => AuthType::Bearer,
             "basic" => AuthType::Basic,
-            _ => return Err(AetherError::Configuration(
-                format!("Unsupported authentication type: {}", self.auth_type)
-            )),
+            _ => {
+                return Err(AetherError::Configuration(format!(
+                    "Unsupported authentication type: {}",
+                    self.auth_type
+                )))
+            }
         };
-        
+
         Ok(AuthSpec {
             auth_type,
             required: true,
         })
     }
-    
+
     /// Resolve environment variables in format ${VAR_NAME}
     pub fn resolve_env_var(value: &str) -> Result<String> {
         if value.starts_with("${") && value.ends_with("}") {
-            let env_var = &value[2..value.len()-1];
-            std::env::var(env_var).map_err(|_| 
+            let env_var = &value[2..value.len() - 1];
+            std::env::var(env_var).map_err(|_| {
                 AetherError::Configuration(format!("Environment variable '{}' not found", env_var))
-            )
+            })
         } else {
             Ok(value.to_string())
         }
@@ -223,53 +232,70 @@ impl Default for ServerConfig {
     }
 }
 
+impl Default for AetherConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AetherConfig {
     /// Load configuration from YAML file
     pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         info!("Loading configuration from {:?}", path.as_ref());
-        
-        let content = tokio::fs::read_to_string(path).await
-            .map_err(|e| AetherError::Configuration(format!("Failed to read config file: {}", e)))?;
-        
+
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| {
+            AetherError::Configuration(format!("Failed to read config file: {}", e))
+        })?;
+
         let config: AetherConfig = serde_yaml::from_str(&content)
             .map_err(|e| AetherError::Configuration(format!("Failed to parse config: {}", e)))?;
-        
+
         config.validate()?;
         info!("Configuration loaded successfully");
         Ok(config)
     }
-    
+
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
         if self.server.host.is_empty() {
-            return Err(AetherError::Configuration("Server host cannot be empty".to_string()));
+            return Err(AetherError::Configuration(
+                "Server host cannot be empty".to_string(),
+            ));
         }
-        
+
         if self.server.port == 0 {
-            return Err(AetherError::Configuration("Server port must be greater than 0".to_string()));
+            return Err(AetherError::Configuration(
+                "Server port must be greater than 0".to_string(),
+            ));
         }
-        
+
         for (name, api_config) in &self.apis {
             if api_config.base_url.is_empty() {
-                return Err(AetherError::Configuration(format!("API '{}' base_url cannot be empty", name)));
+                return Err(AetherError::Configuration(format!(
+                    "API '{}' base_url cannot be empty",
+                    name
+                )));
             }
-            
+
             // Only require openapi_spec if there are no enhanced tools for this API
-            let has_enhanced_tools_for_api = self.enhanced_tools.values()
+            let has_enhanced_tools_for_api = self
+                .enhanced_tools
+                .values()
                 .any(|tool| tool.api_name == *name);
-            
+
             if api_config.openapi_spec.is_empty() && !has_enhanced_tools_for_api {
                 return Err(AetherError::Configuration(format!(
-                    "API '{}' openapi_spec cannot be empty unless enhanced tools are provided", name
+                    "API '{}' openapi_spec cannot be empty unless enhanced tools are provided",
+                    name
                 )));
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Create a default configuration
-    pub fn default() -> Self {
+    pub fn new() -> Self {
         Self {
             server: ServerConfig::default(),
             tools: HashMap::new(),
@@ -285,13 +311,15 @@ impl AetherConfig {
     /// Load configuration from TOML file
     pub async fn load_toml_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         info!("Loading TOML configuration from {:?}", path.as_ref());
-        
-        let content = tokio::fs::read_to_string(path).await
-            .map_err(|e| AetherError::Configuration(format!("Failed to read config file: {}", e)))?;
-        
-        let config: AetherConfig = toml::from_str(&content)
-            .map_err(|e| AetherError::Configuration(format!("Failed to parse TOML config: {}", e)))?;
-        
+
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| {
+            AetherError::Configuration(format!("Failed to read config file: {}", e))
+        })?;
+
+        let config: AetherConfig = toml::from_str(&content).map_err(|e| {
+            AetherError::Configuration(format!("Failed to parse TOML config: {}", e))
+        })?;
+
         config.validate()?;
         info!("TOML configuration loaded successfully");
         Ok(config)
