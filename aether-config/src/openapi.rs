@@ -108,7 +108,7 @@ impl OpenApiProcessor {
                             .unwrap_or(&summary)
                             .to_string();
 
-                        let mut parameters = extract_parameters(op_obj)?;
+                        let mut parameters = extract_parameters(op_obj, &self.spec)?;
 
                         // Also extract parameters from requestBody, passing the full spec for $ref resolution
                         if let Some(request_body_params) =
@@ -165,7 +165,10 @@ fn is_http_method(method: &str) -> bool {
     )
 }
 
-fn extract_parameters(operation: &serde_json::Map<String, Value>) -> Result<Vec<Parameter>> {
+fn extract_parameters(
+    operation: &serde_json::Map<String, Value>,
+    spec: &Value,
+) -> Result<Vec<Parameter>> {
     let mut parameters = Vec::new();
 
     if let Some(params) = operation.get("parameters").and_then(|p| p.as_array()) {
@@ -193,11 +196,14 @@ fn extract_parameters(operation: &serde_json::Map<String, Value>) -> Result<Vec<
                     .unwrap_or(&Value::Object(serde_json::Map::new()))
                     .clone();
 
+                // Resolve $ref in schema if present
+                let resolved_schema = get_effective_schema(&schema, spec).clone();
+
                 parameters.push(Parameter {
                     name,
                     param_type,
                     required,
-                    schema,
+                    schema: resolved_schema,
                 });
             }
         }
@@ -264,11 +270,13 @@ fn extract_request_body_parameters(
                             .unwrap_or_default();
 
                         for (name, property_schema) in properties {
+                            // Resolve $ref in individual property schemas
+                            let resolved_schema = get_effective_schema(property_schema, spec).clone();
                             parameters.push(Parameter {
                                 name: name.clone(),
                                 param_type: "form".to_string(), // Mark as form parameter
                                 required: required_fields.contains(name.as_str()),
-                                schema: property_schema.clone(),
+                                schema: resolved_schema,
                             });
                         }
                     }
@@ -296,11 +304,13 @@ fn extract_request_body_parameters(
                             .unwrap_or_default();
 
                         for (name, property_schema) in properties {
+                            // Resolve $ref in individual property schemas
+                            let resolved_schema = get_effective_schema(property_schema, spec).clone();
                             parameters.push(Parameter {
                                 name: name.clone(),
                                 param_type: "body".to_string(), // Mark as body parameter
                                 required: required_fields.contains(name.as_str()),
-                                schema: property_schema.clone(),
+                                schema: resolved_schema,
                             });
                         }
                     } else {

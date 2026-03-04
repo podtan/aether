@@ -196,6 +196,7 @@ cargo build --release --bin aether-cli
 
 #### Phase 1: Configuration Generation
 - CLI parses OpenAPI specification
+- Resolves all `$ref` references to inline schemas (no external dependencies)
 - Analyzes parameter schemas to detect environment variables (`${VAR_NAME}`)
 - Classifies parameters as server-managed vs user-provided
 - Generates `enhanced_tools` with complete metadata
