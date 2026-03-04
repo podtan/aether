@@ -94,6 +94,7 @@ pub async fn generate_config_from_openapi(
         session: None,
         dev: None,
         mcp_auth: None,
+        pinned_tools: Vec::new(),
     };
 
     info!("🎉 Successfully generated Aether configuration");

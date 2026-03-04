@@ -13,6 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use strsim::jaro_winkler;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -186,16 +187,25 @@ impl McpServer {
     /// List all available tools
     pub async fn list_tools(&self) -> Result<Vec<Tool>, AetherError> {
         let config = self.config.read().await;
+        
+        if config.pinned_tools.is_empty() {
+            self.list_all_tools().await
+        } else {
+            self.list_compact_tools(&config).await
+        }
+    }
+
+    /// List all tools (full mode - no pinning)
+    async fn list_all_tools(&self) -> Result<Vec<Tool>, AetherError> {
+        let config = self.config.read().await;
         let mut tool_list = Vec::new();
 
-        // First, check if we have enhanced tools (from generated configs)
         if !config.enhanced_tools.is_empty() {
             info!("Using enhanced tools from generated config");
 
             for (tool_name, enhanced_tool) in &config.enhanced_tools {
                 let input_schema = self.create_enhanced_tool_schema(enhanced_tool).await;
 
-                // Determine if tool requires authentication
                 let auth_spec = if let Some(api_config) = config.apis.get(&enhanced_tool.api_name) {
                     if let Some(api_auth) = &api_config.authentication {
                         Some(api_auth.to_auth_spec()?)
@@ -214,14 +224,12 @@ impl McpServer {
                 });
             }
         } else {
-            // Fall back to dynamically generated tools
             info!("Using dynamically generated tools");
             let tools = self.tools.read().await;
 
             for (tool_name, tool_def) in tools.iter() {
                 let input_schema = self.create_tool_schema(&tool_def.operation).await;
 
-                // Determine if tool requires authentication
                 let auth_spec = if let Some(api_config) = config.apis.get(&tool_def.api_name) {
                     if let Some(api_auth) = &api_config.authentication {
                         Some(api_auth.to_auth_spec()?)
@@ -252,6 +260,119 @@ impl McpServer {
         Ok(tool_list)
     }
 
+    /// List compact tools (pinned + search tools)
+    async fn list_compact_tools(&self, config: &AetherConfig) -> Result<Vec<Tool>, AetherError> {
+        let mut tool_list = Vec::new();
+        let all_tools = self.list_all_tools_for_compact().await?;
+        let tools_map: HashMap<String, Tool> = all_tools.into_iter().map(|t| (t.name.clone(), t)).collect();
+
+        for pinned_name in &config.pinned_tools {
+            if let Some(tool) = tools_map.get(pinned_name) {
+                tool_list.push(tool.clone());
+            } else {
+                warn!("Pinned tool '{}' not found", pinned_name);
+            }
+        }
+
+        for api_name in config.apis.keys() {
+            tool_list.extend(self.generate_search_tools(api_name));
+        }
+
+        debug!("Listed {} tools (compact mode)", tool_list.len());
+        Ok(tool_list)
+    }
+
+    /// List all tools without filtering (helper for compact mode)
+    async fn list_all_tools_for_compact(&self) -> Result<Vec<Tool>, AetherError> {
+        let config = self.config.read().await;
+        let mut tool_list = Vec::new();
+
+        if !config.enhanced_tools.is_empty() {
+            for (tool_name, enhanced_tool) in &config.enhanced_tools {
+                let input_schema = self.create_enhanced_tool_schema(enhanced_tool).await;
+                let auth_spec = if let Some(api_config) = config.apis.get(&enhanced_tool.api_name) {
+                    if let Some(api_auth) = &api_config.authentication {
+                        Some(api_auth.to_auth_spec()?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                tool_list.push(Tool {
+                    name: tool_name.clone(),
+                    description: enhanced_tool.description.clone(),
+                    parameters: input_schema,
+                    auth_spec,
+                });
+            }
+        } else {
+            let tools = self.tools.read().await;
+            for (tool_name, tool_def) in tools.iter() {
+                let input_schema = self.create_tool_schema(&tool_def.operation).await;
+                let auth_spec = if let Some(api_config) = config.apis.get(&tool_def.api_name) {
+                    if let Some(api_auth) = &api_config.authentication {
+                        Some(api_auth.to_auth_spec()?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                tool_list.push(Tool {
+                    name: tool_name.clone(),
+                    description: if tool_def.operation.description.is_empty() {
+                        format!(
+                            "{} operation from {} API",
+                            tool_def.operation.operation_id, tool_def.api_name
+                        )
+                    } else {
+                        tool_def.operation.description.clone()
+                    },
+                    parameters: input_schema,
+                    auth_spec,
+                });
+            }
+        }
+
+        Ok(tool_list)
+    }
+
+    /// Generate synthetic search tools for an API
+    fn generate_search_tools(&self, api_name: &str) -> Vec<Tool> {
+        vec![
+            Tool {
+                name: format!("{}_search_tools", api_name),
+                description: format!(
+                    "Search for tools in the {} API by name or description. Returns matching tool definitions that can be called directly.",
+                    api_name
+                ),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search terms to match against tool names and descriptions"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+                auth_spec: None,
+            },
+            Tool {
+                name: format!("{}_list_tools", api_name),
+                description: format!(
+                    "List all available tools in the {} API. Returns complete tool definitions.",
+                    api_name
+                ),
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+                auth_spec: None,
+            },
+        ]
+    }
+
     /// Call a specific tool
     pub async fn call_tool(
         &self,
@@ -261,9 +382,12 @@ impl McpServer {
     ) -> Result<ToolResponse, AetherError> {
         info!("🔧 Calling tool: {}", tool_name);
 
+        if let Some(response) = self.handle_synthetic_tool(tool_name, &arguments).await? {
+            return Ok(response);
+        }
+
         let config = self.config.read().await;
 
-        // First check if we have an enhanced tool (from generated config)
         if let Some(enhanced_tool) = config.enhanced_tools.get(tool_name) {
             info!("📋 Found enhanced tool definition for: {}", tool_name);
             return self
@@ -271,7 +395,6 @@ impl McpServer {
                 .await;
         }
 
-        // Fall back to regular dynamically generated tools
         let tools = self.tools.read().await;
         if let Some(tool_def) = tools.get(tool_name) {
             let tool_def = tool_def.clone();
@@ -287,6 +410,83 @@ impl McpServer {
 
         error!("❌ Tool not found: {}", tool_name);
         Err(AetherError::Mcp(format!("Tool not found: {}", tool_name)))
+    }
+
+    /// Handle synthetic search/list tools
+    async fn handle_synthetic_tool(
+        &self,
+        tool_name: &str,
+        arguments: &HashMap<String, Value>,
+    ) -> Result<Option<ToolResponse>, AetherError> {
+        if let Some(api_name) = tool_name.strip_suffix("_search_tools") {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AetherError::Mcp("query parameter required".to_string()))?;
+
+            info!("🔍 Searching tools for API '{}' with query: {}", api_name, query);
+            let tools = self.search_tools_by_api(api_name, query).await?;
+            
+            return Ok(Some(ToolResponse {
+                content: serde_json::to_value(tools)
+                    .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize tools"})),
+                is_error: false,
+            }));
+        }
+
+        if let Some(api_name) = tool_name.strip_suffix("_list_tools") {
+            info!("📋 Listing all tools for API: {}", api_name);
+            let tools = self.list_tools_by_api(api_name).await?;
+            
+            return Ok(Some(ToolResponse {
+                content: serde_json::to_value(tools)
+                    .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize tools"})),
+                is_error: false,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    /// Search tools by API with fuzzy matching
+    async fn search_tools_by_api(&self, api_name: &str, query: &str) -> Result<Vec<Tool>, AetherError> {
+        let all_tools = self.list_all_tools_for_compact().await?;
+        
+        Ok(all_tools
+            .into_iter()
+            .filter(|t| t.name.starts_with(&format!("{}_", api_name)))
+            .filter(|t| self.matches_query(&t.name, &t.description, query))
+            .collect())
+    }
+
+    /// List all tools for a specific API
+    async fn list_tools_by_api(&self, api_name: &str) -> Result<Vec<Tool>, AetherError> {
+        let all_tools = self.list_all_tools_for_compact().await?;
+        
+        Ok(all_tools
+            .into_iter()
+            .filter(|t| t.name.starts_with(&format!("{}_", api_name)))
+            .collect())
+    }
+
+    /// Fuzzy match query against tool name and description
+    fn matches_query(&self, name: &str, description: &str, query: &str) -> bool {
+        let query_lower = query.to_lowercase();
+        let name_lower = name.to_lowercase();
+        let desc_lower = description.to_lowercase();
+
+        for word in query_lower.split_whitespace() {
+            if name_lower.contains(word) || desc_lower.contains(word) {
+                return true;
+            }
+        }
+
+        let full_query_score = jaro_winkler(&query_lower, &name_lower).max(jaro_winkler(&query_lower, &desc_lower));
+        if full_query_score > 0.6 {
+            return true;
+        }
+
+        false
     }
 
     /// Call an enhanced tool (with parameter source metadata)

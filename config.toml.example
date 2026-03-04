@@ -43,6 +43,11 @@ public_health = true         # Keep /health endpoint public
 # IMPORTANT: When enabled=true, you must also configure [oidc] section above
 # See docs/oauth2/CLIENTS.md for setup instructions
 
+# Pinned Tools Configuration
+# When set, tools/list returns only pinned tools + search tools per API
+# When empty (default), all tools are returned (current behavior)
+# pinned_tools = ["pdt_getAsset", "pdt_createAsset", "example_toolEmployees"]
+
 # API configurations remain the same
 [apis]
 # Example API configuration

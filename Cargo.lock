@@ -124,6 +124,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "strsim",
  "tokio",
  "tokio-stream",
  "tower",

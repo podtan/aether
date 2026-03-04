@@ -30,6 +30,8 @@ pub struct AetherConfig {
     pub dev: Option<DevConfig>,
     #[serde(default)]
     pub mcp_auth: Option<McpAuthConfig>,
+    #[serde(default)]
+    pub pinned_tools: Vec<String>,
 }
 
 /// Server configuration
@@ -305,6 +307,7 @@ impl AetherConfig {
             session: None,
             dev: None,
             mcp_auth: None,
+            pinned_tools: Vec::new(),
         }
     }
 
