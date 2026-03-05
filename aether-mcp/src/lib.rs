@@ -187,11 +187,23 @@ impl McpServer {
     /// List all available tools
     pub async fn list_tools(&self) -> Result<Vec<Tool>, AetherError> {
         let config = self.config.read().await;
+        let pinned_count = config.pinned_tools.len();
+        
+        info!("📋 list_tools called - pinned_tools count: {}", pinned_count);
+        if pinned_count > 0 {
+            info!("📋 Pinned tools: {:?}", config.pinned_tools);
+        }
         
         if config.pinned_tools.is_empty() {
+            info!("📋 Using full mode (all tools)");
+            drop(config);
             self.list_all_tools().await
         } else {
-            self.list_compact_tools(&config).await
+            info!("📋 Using compact mode (pinned + search tools)");
+            let pinned = config.pinned_tools.clone();
+            let apis: Vec<String> = config.apis.keys().cloned().collect();
+            drop(config);
+            self.list_compact_tools(&pinned, &apis).await
         }
     }
 
@@ -261,12 +273,12 @@ impl McpServer {
     }
 
     /// List compact tools (pinned + search tools)
-    async fn list_compact_tools(&self, config: &AetherConfig) -> Result<Vec<Tool>, AetherError> {
+    async fn list_compact_tools(&self, pinned_tools: &[String], apis: &[String]) -> Result<Vec<Tool>, AetherError> {
         let mut tool_list = Vec::new();
         let all_tools = self.list_all_tools_for_compact().await?;
         let tools_map: HashMap<String, Tool> = all_tools.into_iter().map(|t| (t.name.clone(), t)).collect();
 
-        for pinned_name in &config.pinned_tools {
+        for pinned_name in pinned_tools {
             if let Some(tool) = tools_map.get(pinned_name) {
                 tool_list.push(tool.clone());
             } else {
@@ -274,11 +286,11 @@ impl McpServer {
             }
         }
 
-        for api_name in config.apis.keys() {
+        for api_name in apis {
             tool_list.extend(self.generate_search_tools(api_name));
         }
 
-        debug!("Listed {} tools (compact mode)", tool_list.len());
+        info!("Listed {} tools (compact mode)", tool_list.len());
         Ok(tool_list)
     }
 
