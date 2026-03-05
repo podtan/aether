@@ -30,7 +30,7 @@ aether-core = { path = "../aether-core" }
 clap = { workspace = true }
 
 # OIDC authentication dependencies
-openid = "0.10"
+openid = { version = "0.10", default-features = false, features = ["rustls"] }
 url = "2.5"
 uuid = { version = "1.0", features = ["v4"] }
 base64 = "0.22"

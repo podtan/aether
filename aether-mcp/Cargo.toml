@@ -38,6 +38,6 @@ strsim = { workspace = true }
 
 [dev-dependencies]
 rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots", "stream"], default-features = false }
 wiremock = "0.6"
 tower = { workspace = true }
