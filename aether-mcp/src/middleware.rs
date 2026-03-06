@@ -16,14 +16,26 @@ use tracing::{debug, info, warn};
 pub struct AuthMiddlewareState {
     pub config: McpAuthConfig,
     pub validator: Arc<ResourceServerClient>,
+    pub server_base_url: Option<String>,
+    pub api_name: Option<String>,
 }
 
 impl AuthMiddlewareState {
     pub async fn new(config: McpAuthConfig) -> anyhow::Result<Self> {
+        Self::new_with_base_url(config, None, None).await
+    }
+    
+    pub async fn new_with_base_url(
+        config: McpAuthConfig, 
+        server_base_url: Option<String>,
+        api_name: Option<String>
+    ) -> anyhow::Result<Self> {
         if !config.enabled {
             return Ok(Self {
                 config,
                 validator: Arc::new(ResourceServerClient::new()),
+                server_base_url,
+                api_name,
             });
         }
 
@@ -38,6 +50,8 @@ impl AuthMiddlewareState {
         Ok(Self {
             config,
             validator: Arc::new(validator),
+            server_base_url,
+            api_name,
         })
     }
 }
@@ -75,7 +89,10 @@ pub async fn mcp_auth_middleware(
                 None => {
                     warn!("Invalid Authorization header format (expected 'Bearer <token>')");
                     if auth_state.config.require_auth {
-                        return Err(StatusCode::UNAUTHORIZED);
+                        return Ok(unauthorized_response(
+                            auth_state.api_name.as_deref(),
+                            auth_state.server_base_url.as_deref()
+                        ));
                     } else {
                         // Auth not required, allow request without token
                         return Ok(next.run(request).await);
@@ -87,7 +104,10 @@ pub async fn mcp_auth_middleware(
             debug!("No Authorization header present");
             if auth_state.config.require_auth {
                 warn!("Missing Authorization header, rejecting request");
-                return Err(StatusCode::UNAUTHORIZED);
+                return Ok(unauthorized_response(
+                    auth_state.api_name.as_deref(),
+                    auth_state.server_base_url.as_deref()
+                ));
             } else {
                 // Auth not required, allow request
                 return Ok(next.run(request).await);
@@ -124,7 +144,10 @@ pub async fn mcp_auth_middleware(
         }
         Err(e) => {
             warn!("Token validation failed: {}", e);
-            Err(StatusCode::UNAUTHORIZED)
+            Ok(unauthorized_response(
+                auth_state.api_name.as_deref(),
+                auth_state.server_base_url.as_deref()
+            ))
         }
     }
 }
@@ -139,14 +162,40 @@ fn is_public_endpoint_single(path: &str) -> bool {
     path == "/.well-known/oauth-protected-resource"
 }
 
-/// Error response with WWW-Authenticate header (RFC 6750)
-pub fn unauthorized_response() -> Response {
+/// Error response with WWW-Authenticate header (RFC 6750 + RFC 9728)
+pub fn unauthorized_response(api_name: Option<&str>, server_base_url: Option<&str>) -> Response {
     let mut response = StatusCode::UNAUTHORIZED.into_response();
+    
+    // Build WWW-Authenticate header with resource_metadata per RFC 9728
+    let www_authenticate = if let (Some(name), Some(base_url)) = (api_name, server_base_url) {
+        // Per-API mode: include resource_metadata pointing to PRM endpoint
+        let resource_metadata = format!(
+            "{}/{}/.well-known/oauth-protected-resource",
+            base_url.trim_end_matches('/'),
+            name
+        );
+        format!(
+            r#"Bearer realm="aether-mcp", resource_metadata="{}""#,
+            resource_metadata
+        )
+    } else if let Some(base_url) = server_base_url {
+        // Single-config mode: include resource_metadata for global PRM endpoint
+        let resource_metadata = format!(
+            "{}/.well-known/oauth-protected-resource",
+            base_url.trim_end_matches('/')
+        );
+        format!(
+            r#"Bearer realm="aether-mcp", resource_metadata="{}""#,
+            resource_metadata
+        )
+    } else {
+        // Fallback without resource_metadata (shouldn't happen in normal operation)
+        r#"Bearer realm="aether-mcp", error="invalid_token""#.to_string()
+    };
+    
     response.headers_mut().insert(
         header::WWW_AUTHENTICATE,
-        r#"Bearer realm="aether-mcp", error="invalid_token""#
-            .parse()
-            .unwrap(),
+        www_authenticate.parse().unwrap(),
     );
     response
 }
@@ -183,8 +232,16 @@ pub async fn per_api_auth_middleware(
         }
     };
     
+    // Create a new state with API name and base URL for proper RFC 9728 WWW-Authenticate header
+    let auth_state_with_url = AuthMiddlewareState {
+        config: auth_state.config,
+        validator: auth_state.validator,
+        server_base_url: Some(app_state.get_server_base_url().to_string()),
+        api_name: api_name.clone(),
+    };
+    
     // Use existing auth validation logic
-    mcp_auth_middleware(State(auth_state), request, next).await
+    mcp_auth_middleware(State(auth_state_with_url), request, next).await
 }
 
 /// Extract API name from request path

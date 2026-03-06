@@ -88,10 +88,15 @@ impl HttpSseTransport {
             sse_state: self.sse_state,
             prm_config: pep_prm_config.clone(),
         };
-
+        
         // Create auth middleware state if configured
+        let server_base_url = format!("http://{}", self.bind_addr);
         let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
-            Some(crate::middleware::AuthMiddlewareState::new(mcp_auth_config).await?)
+            Some(crate::middleware::AuthMiddlewareState::new_with_base_url(
+                mcp_auth_config,
+                Some(server_base_url),
+                None,  // No API name in single-config mode
+            ).await?)
         } else {
             None
         };
@@ -644,15 +649,18 @@ impl MultiConfigTransport {
         // Load per-API auth configurations
         let mut auth_configs = HashMap::new();
         let apis = self.multi_server.list_apis().await;
+        let server_base_url = format!("http://{}", self.bind_addr);
         
         for api_name in &apis {
             if let Some(server) = self.multi_server.get_server(api_name).await {
                 let config = server.get_config().await;
                 if let Some(mcp_auth) = &config.mcp_auth {
                     if mcp_auth.enabled {
-                        // Create auth middleware state for this API
-                        match crate::middleware::AuthMiddlewareState::new(
+                        // Create auth middleware state for this API with server_base_url
+                        match crate::middleware::AuthMiddlewareState::new_with_base_url(
                             mcp_auth.clone(),
+                            Some(server_base_url.clone()),
+                            Some(api_name.clone()),
                         ).await {
                             Ok(auth_state) => {
                                 info!("Enabled auth for API: {}", api_name);
@@ -805,6 +813,11 @@ impl MultiAppState {
     /// Get auth config for a specific API
     pub async fn get_auth_config(&self, api_name: &str) -> Option<crate::middleware::AuthMiddlewareState> {
         self.auth_configs.read().await.get(api_name).cloned()
+    }
+    
+    /// Get server base URL for constructing RFC 9728 WWW-Authenticate headers
+    pub fn get_server_base_url(&self) -> &str {
+        &self.server_base_url
     }
 }
 
