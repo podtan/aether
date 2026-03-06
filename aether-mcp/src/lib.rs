@@ -62,6 +62,11 @@ impl McpServer {
         Ok(server)
     }
 
+    /// Get the server's configuration (for PRM)
+    pub async fn get_config(&self) -> AetherConfig {
+        self.config.read().await.clone()
+    }
+
     /// Reload configuration and rebuild tools
     pub async fn reload_configuration(&self) -> std::result::Result<(), AetherError> {
         info!("Reloading MCP server configuration");

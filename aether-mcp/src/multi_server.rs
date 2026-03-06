@@ -133,11 +133,6 @@ impl MultiConfigServer {
         Ok(())
     }
 
-    /// Get configuration for an API (for editing)
-    pub async fn get_api_config(&self, api_name: &str) -> Result<(AetherConfig, String)> {
-        self.directory_manager.load_api_config(api_name).await
-    }
-
     /// Get all server statistics
     pub async fn get_all_stats(&self) -> HashMap<String, HashMap<String, serde_json::Value>> {
         let mut all_stats = HashMap::new();
@@ -149,5 +144,21 @@ impl MultiConfigServer {
         }
 
         all_stats
+    }
+
+    /// Get the PRM config for a specific API
+    pub async fn get_prm_config(&self, api_name: &str) -> Option<aether_config::PrmConfig> {
+        let servers = self.servers.read().await;
+        if let Some(server) = servers.get(api_name) {
+            let config = server.get_config().await;
+            config.prm.clone()
+        } else {
+            None
+        }
+    }
+
+    /// Get API configuration for editing
+    pub async fn get_api_config(&self, api_name: &str) -> Result<(AetherConfig, String)> {
+        self.directory_manager.load_api_config(api_name).await
     }
 }

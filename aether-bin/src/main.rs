@@ -169,7 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let transport = MultiConfigTransport::new(multi_server, bind_addr);
         // Multi-config mode doesn't support MCP auth yet (requires per-API config design)
-        if let Err(e) = transport.start(None, None).await {
+        // PRM also not supported in multi-config mode yet
+        if let Err(e) = transport.start(None, None, None).await {
             error!("Multi-config server error: {}", e);
             std::process::exit(1);
         }

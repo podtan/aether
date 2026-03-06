@@ -9,7 +9,7 @@ use anyhow;
 use axum::{
     extract::{Path as AxumPath, Query, State},
     http::StatusCode,
-    response::sse::{Event, KeepAlive, Sse},
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -65,10 +65,28 @@ impl HttpSseTransport {
         self,
         auth_config: Option<aether_config::McpAuthConfig>,
         oidc_config: Option<&aether_config::OidcConfig>,
+        prm_config: Option<&aether_config::PrmConfig>,
     ) -> anyhow::Result<()> {
+        // Convert PRM config to PEP format
+        let pep_prm_config = prm_config.and_then(|p| {
+            Some(pep::PrmConfig {
+                resource: p.resource.clone(),
+                authorization_servers: p.authorization_servers.clone(),
+                jwks_uri: p.jwks_uri.clone(),
+                scopes_supported: p.scopes_supported.clone(),
+                bearer_methods_supported: p.bearer_methods_supported.clone(),
+                resource_signing_alg_values_supported: p.resource_signing_alg_values_supported.clone(),
+                resource_name: p.resource_name.clone(),
+                resource_documentation: p.resource_documentation.clone(),
+                resource_policy_uri: p.resource_policy_uri.clone(),
+                resource_tos_uri: p.resource_tos_uri.clone(),
+            })
+        });
+        
         let app_state = AppState {
             server: self.server,
             sse_state: self.sse_state,
+            prm_config: pep_prm_config.clone(),
         };
 
         // Create auth middleware state if configured
@@ -85,6 +103,12 @@ impl HttpSseTransport {
             .route("/sse", get(handle_sse))
             .route("/sse", post(handle_sse_message)) // Handle MCP messages over SSE
             .route("/api/generate-config", post(handle_generate_config)); // New config generation API
+
+        // Add RFC 9728 PRM endpoint if configured
+        if pep_prm_config.is_some() {
+            app = app.route("/.well-known/oauth-protected-resource", axum::routing::get(handle_prm));
+            info!("RFC 9728 PRM endpoint enabled at /.well-known/oauth-protected-resource");
+        }
 
         // Apply auth middleware to protected routes
         if let Some(auth_state) = auth_middleware_state {
@@ -123,6 +147,7 @@ impl HttpSseTransport {
 pub struct AppState {
     pub server: Arc<McpServer>,
     pub sse_state: Arc<SseState>,
+    pub prm_config: Option<pep::PrmConfig>,
 }
 
 /// Handle MCP messages via POST /message (session-based)
@@ -331,6 +356,22 @@ pub async fn handle_generate_config(
             error!("❌ Failed to generate config: {}", e);
             Err(StatusCode::BAD_REQUEST)
         }
+    }
+}
+
+/// RFC 9728 Protected Resource Metadata endpoint
+pub async fn handle_prm(State(app_state): State<AppState>) -> impl axum::response::IntoResponse {
+    if let Some(prm_config) = &app_state.prm_config {
+        let metadata: pep::ProtectedResourceMetadata = prm_config.clone().into();
+        match serde_json::to_string(&metadata) {
+            Ok(json) => ([("content-type", "application/json")], json).into_response(),
+            Err(e) => {
+                error!("Failed to serialize PRM: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        }
+    } else {
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 
@@ -595,6 +636,7 @@ impl MultiConfigTransport {
         self,
         auth_config: Option<aether_config::McpAuthConfig>,
         oidc_config: Option<&aether_config::OidcConfig>,
+        _prm_config: Option<&aether_config::PrmConfig>,  // Not used in multi-config
     ) -> anyhow::Result<()> {
         let multi_state = MultiAppState {
             multi_server: self.multi_server,
@@ -618,6 +660,8 @@ impl MultiConfigTransport {
             .route("/{api_name}/message", post(handle_multi_message))
             .route("/{api_name}/messages", post(handle_multi_message))
             .route("/{api_name}/sse", get(handle_multi_sse))
+            // Per-API PRM endpoint
+            .route("/{api_name}/.well-known/oauth-protected-resource", get(handle_api_prm))
             // API management endpoints
             .route("/api/generate-config", post(handle_generate_config))
             .route("/api/upload-openapi", post(handle_upload_openapi))
@@ -668,6 +712,28 @@ pub struct MultiAppState {
     multi_server: Arc<MultiConfigServer>,
     sse_state: Arc<SseState>,
     web_state: WebState,
+}
+
+impl MultiAppState {
+    /// List all configured APIs
+    pub async fn list_apis(&self) -> Vec<String> {
+        self.multi_server.list_apis().await
+    }
+
+    /// Get MCP server for a specific API
+    pub async fn get_server(&self, api_name: &str) -> Option<McpServer> {
+        self.multi_server.get_server(api_name).await
+    }
+
+    /// Get PRM config for a specific API
+    pub async fn get_prm_config(&self, api_name: &str) -> Option<aether_config::PrmConfig> {
+        self.multi_server.get_prm_config(api_name).await
+    }
+
+    /// Get all server statistics
+    pub async fn get_all_stats(&self) -> HashMap<String, HashMap<String, serde_json::Value>> {
+        self.multi_server.get_all_stats().await
+    }
 }
 
 /// Handle single-API messages (backwards compatibility)
@@ -1004,6 +1070,55 @@ async fn handle_delete_api(
                 "error": format!("Failed to delete API: {}", e)
             })))
         }
+    }
+}
+
+/// RFC 9728 Protected Resource Metadata endpoint for multi-config (global - deprecated)
+pub async fn handle_multi_prm(State(_app_state): State<MultiAppState>) -> impl IntoResponse {
+    // This is deprecated - per-API PRM should be used instead
+    StatusCode::NOT_FOUND.into_response()
+}
+
+/// RFC 9728 Protected Resource Metadata endpoint per-API
+pub async fn handle_api_prm(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+) -> impl IntoResponse {
+    // Get the server for this API
+    let server = match app_state.get_server(&api_name).await {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    
+    // Get the config from the server
+    let config = server.get_config().await;
+    
+    // Get PRM config from the API's config
+    if let Some(prm) = &config.prm {
+        let pep_prm_config = pep::PrmConfig {
+            resource: prm.resource.clone(),
+            authorization_servers: prm.authorization_servers.clone(),
+            jwks_uri: prm.jwks_uri.clone(),
+            scopes_supported: prm.scopes_supported.clone(),
+            bearer_methods_supported: prm.bearer_methods_supported.clone(),
+            resource_signing_alg_values_supported: prm.resource_signing_alg_values_supported.clone(),
+            resource_name: prm.resource_name.clone(),
+            resource_documentation: prm.resource_documentation.clone(),
+            resource_policy_uri: prm.resource_policy_uri.clone(),
+            resource_tos_uri: prm.resource_tos_uri.clone(),
+        };
+        
+        let metadata: pep::ProtectedResourceMetadata = pep_prm_config.into();
+        match serde_json::to_string(&metadata) {
+            Ok(json) => ([("content-type", "application/json")], json).into_response(),
+            Err(e) => {
+                error!("Failed to serialize PRM for API {}: {}", api_name, e);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        }
+    } else {
+        debug!("No PRM config found for API: {}", api_name);
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 

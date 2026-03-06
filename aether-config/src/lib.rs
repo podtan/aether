@@ -32,6 +32,8 @@ pub struct AetherConfig {
     pub mcp_auth: Option<McpAuthConfig>,
     #[serde(default)]
     pub pinned_tools: Vec<String>,
+    #[serde(default)]
+    pub prm: Option<PrmConfig>,
 }
 
 /// Server configuration
@@ -148,6 +150,61 @@ pub struct McpAuthConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// RFC 9728 Protected Resource Metadata configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrmConfig {
+    /// The protected resource's resource identifier URL
+    pub resource: String,
+    /// List of OAuth authorization server issuer identifiers
+    #[serde(default)]
+    pub authorization_servers: Vec<String>,
+    /// URL of the protected resource's JWK Set document
+    #[serde(default)]
+    pub jwks_uri: Option<String>,
+    /// List of scope values supported
+    #[serde(default)]
+    pub scopes_supported: Vec<String>,
+    /// List of supported bearer token methods
+    #[serde(default = "default_bearer_methods")]
+    pub bearer_methods_supported: Vec<String>,
+    /// List of JWS signing algorithms supported
+    #[serde(default)]
+    pub resource_signing_alg_values_supported: Vec<String>,
+    /// Human-readable name of the protected resource
+    #[serde(default)]
+    pub resource_name: Option<String>,
+    /// URL of documentation for developers
+    #[serde(default)]
+    pub resource_documentation: Option<String>,
+    /// URL of policy information
+    #[serde(default)]
+    pub resource_policy_uri: Option<String>,
+    /// URL of terms of service
+    #[serde(default)]
+    pub resource_tos_uri: Option<String>,
+}
+
+fn default_bearer_methods() -> Vec<String> {
+    vec!["header".to_string()]
+}
+
+impl Default for PrmConfig {
+    fn default() -> Self {
+        Self {
+            resource: String::new(),
+            authorization_servers: Vec::new(),
+            jwks_uri: None,
+            scopes_supported: Vec::new(),
+            bearer_methods_supported: default_bearer_methods(),
+            resource_signing_alg_values_supported: Vec::new(),
+            resource_name: None,
+            resource_documentation: None,
+            resource_policy_uri: None,
+            resource_tos_uri: None,
+        }
+    }
 }
 
 impl McpAuthConfig {
@@ -308,6 +365,7 @@ impl AetherConfig {
             dev: None,
             mcp_auth: None,
             pinned_tools: Vec::new(),
+            prm: None,
         }
     }
 

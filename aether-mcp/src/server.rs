@@ -20,6 +20,7 @@ pub async fn start_sse_server(config: AetherConfig, bind_addr: SocketAddr) -> an
     // Extract auth config before moving config
     let mcp_auth_config = config.mcp_auth.clone();
     let oidc_config = config.oidc.clone();
+    let prm_config = config.prm.clone();
 
     // Create the MCP server
     let server = McpServer::new(config)
@@ -29,7 +30,7 @@ pub async fn start_sse_server(config: AetherConfig, bind_addr: SocketAddr) -> an
     // Create and start the HTTP SSE transport with auth config
     let transport = HttpSseTransport::new(server, bind_addr);
     transport
-        .start(mcp_auth_config, oidc_config.as_ref())
+        .start(mcp_auth_config, oidc_config.as_ref(), prm_config.as_ref())
         .await?;
 
     Ok(())
