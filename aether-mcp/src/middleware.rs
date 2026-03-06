@@ -53,6 +53,13 @@ pub async fn mcp_auth_middleware(
         debug!("MCP auth disabled, allowing request");
         return Ok(next.run(request).await);
     }
+    
+    // Skip auth for public endpoints (OAuth facade, health, etc.)
+    let path = request.uri().path();
+    if is_public_endpoint_single(path) {
+        debug!("Skipping auth for public endpoint: {}", path);
+        return Ok(next.run(request).await);
+    }
 
     // Extract Authorization header
     let auth_header = request
@@ -120,6 +127,16 @@ pub async fn mcp_auth_middleware(
             Err(StatusCode::UNAUTHORIZED)
         }
     }
+}
+
+/// Check if endpoint should be public (no auth required) - single-config mode
+fn is_public_endpoint_single(path: &str) -> bool {
+    path == "/health" ||
+    path.starts_with("/api/") ||
+    path == "/authorize" ||
+    path == "/token" ||
+    path == "/.well-known/oauth-authorization-server" ||
+    path == "/.well-known/oauth-protected-resource"
 }
 
 /// Error response with WWW-Authenticate header (RFC 6750)
@@ -194,5 +211,8 @@ fn extract_api_name(path: &str) -> Option<String> {
 fn is_public_endpoint(path: &str) -> bool {
     path.starts_with("/health") ||
     path.starts_with("/api/") ||
+    path.ends_with("/authorize") ||
+    path.ends_with("/token") ||
+    path.ends_with("/.well-known/oauth-authorization-server") ||
     path.ends_with("/.well-known/oauth-protected-resource")
 }

@@ -542,6 +542,8 @@ impl MultiConfigTransport {
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
             auth_configs: Arc::new(RwLock::new(HashMap::new())),
+            oauth_facades: Arc::new(RwLock::new(HashMap::new())),
+            server_base_url: format!("http://{}", self.bind_addr),
         };
 
         // Create upload callback that uses the multi-config server
@@ -665,11 +667,32 @@ impl MultiConfigTransport {
             }
         }
         
+        // Load per-API OAuth facades
+        let mut oauth_facades = HashMap::new();
+        for api_name in &apis {
+            if let Some(server) = self.multi_server.get_server(api_name).await {
+                let config = server.get_config().await;
+                if let Some(oidc_config) = &config.oidc {
+                    match OAuthFacade::from_oidc_config(oidc_config).await {
+                        Ok(facade) => {
+                            info!("Enabled OAuth facade for API: {}", api_name);
+                            oauth_facades.insert(api_name.clone(), facade);
+                        }
+                        Err(e) => {
+                            warn!("Failed to create OAuth facade for API {}: {}", api_name, e);
+                        }
+                    }
+                }
+            }
+        }
+        
         let multi_state = MultiAppState {
             multi_server: self.multi_server,
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
             auth_configs: Arc::new(RwLock::new(auth_configs)),
+            oauth_facades: Arc::new(RwLock::new(oauth_facades)),
+            server_base_url: format!("http://{}", self.bind_addr),
         };
 
         let mut mcp_router = Router::new()
@@ -725,14 +748,42 @@ impl MultiConfigTransport {
         Ok(())
     }
 }
+/// OAuth facade for VSCode MCP client compatibility
+#[derive(Clone)]
+pub struct OAuthFacade {
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub issuer_url: String,
+}
+
+impl OAuthFacade {
+    pub async fn from_oidc_config(oidc_config: &aether_config::OidcConfig) -> anyhow::Result<Self> {
+        let discovery_url = format!(
+            "{}/.well-known/openid-configuration",
+            oidc_config.issuer_url.trim_end_matches('/')
+        );
+        
+        let client = reqwest::Client::new();
+        let response = client.get(&discovery_url).send().await?;
+        let discovery: serde_json::Value = response.json().await?;
+        
+        Ok(Self {
+            authorization_endpoint: discovery["authorization_endpoint"].as_str().unwrap().to_string(),
+            token_endpoint: discovery["token_endpoint"].as_str().unwrap().to_string(),
+            issuer_url: oidc_config.issuer_url.clone(),
+        })
+    }
+}
+
 /// Multi-app state for managing multiple configurations  
 #[derive(Clone)]
 pub struct MultiAppState {
     multi_server: Arc<MultiConfigServer>,
     sse_state: Arc<SseState>,
     web_state: WebState,
-    /// Per-API auth configurations
     auth_configs: Arc<RwLock<HashMap<String, crate::middleware::AuthMiddlewareState>>>,
+    oauth_facades: Arc<RwLock<HashMap<String, OAuthFacade>>>,
+    server_base_url: String,
 }
 
 impl MultiAppState {
@@ -746,19 +797,14 @@ impl MultiAppState {
         self.multi_server.get_server(api_name).await
     }
 
-    /// Get PRM config for a specific API
-    pub async fn get_prm_config(&self, api_name: &str) -> Option<aether_config::PrmConfig> {
-        self.multi_server.get_prm_config(api_name).await
+    /// Get OAuth facade for a specific API
+    pub async fn get_oauth_facade(&self, api_name: &str) -> Option<OAuthFacade> {
+        self.oauth_facades.read().await.get(api_name).cloned()
     }
-
+    
     /// Get auth config for a specific API
     pub async fn get_auth_config(&self, api_name: &str) -> Option<crate::middleware::AuthMiddlewareState> {
         self.auth_configs.read().await.get(api_name).cloned()
-    }
-
-    /// Get all server statistics
-    pub async fn get_all_stats(&self) -> HashMap<String, HashMap<String, serde_json::Value>> {
-        self.multi_server.get_all_stats().await
     }
 }
 
@@ -1105,7 +1151,7 @@ pub async fn handle_multi_prm(State(_app_state): State<MultiAppState>) -> impl I
     StatusCode::NOT_FOUND.into_response()
 }
 
-/// RFC 9728 Protected Resource Metadata endpoint per-API
+/// Per-API RFC 9728 Protected Resource Metadata endpoint
 pub async fn handle_api_prm(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
@@ -1145,6 +1191,91 @@ pub async fn handle_api_prm(
     } else {
         debug!("No PRM config found for API: {}", api_name);
         StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+/// Per-API OAuth facade: Redirect /{api_name}/authorize to actual OAuth server
+pub async fn handle_multi_oauth_authorize(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    // Get OAuth facade for this API
+    let facade = match app_state.get_oauth_facade(&api_name).await {
+        Some(f) => f,
+        None => {
+            warn!("No OAuth facade configured for API: {}", api_name);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    
+    // Build redirect URL with all query parameters preserved
+    let query_string: String = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&");
+    
+    let redirect_url = if query_string.is_empty() {
+        facade.authorization_endpoint.clone()
+    } else {
+        format!("{}?{}", facade.authorization_endpoint, query_string)
+    };
+    
+    debug!("OAuth facade: Redirecting /{}/authorize to {}", api_name, redirect_url);
+    
+    axum::response::Redirect::temporary(&redirect_url).into_response()
+}
+
+ 
+/// Per-API OAuth facade: Proxy /{api_name}/token requests to actual OAuth server
+pub async fn handle_multi_oauth_token(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+    body: String,
+) -> impl IntoResponse {
+    // Get OAuth facade for this API
+    let facade = match app_state.get_oauth_facade(&api_name).await {
+        Some(f) => f,
+        None => {
+            warn!("No OAuth facade configured for API: {}", api_name);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    
+    debug!("OAuth facade: Proxying /{}/token to {}", api_name, facade.token_endpoint);
+    
+    let client = reqwest::Client::new();
+    
+    match client
+        .post(&facade.token_endpoint)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.text().await {
+                Ok(response_body) => {
+                    debug!("OAuth facade: Token proxy successful for API {} (status {})", api_name, status);
+                    (
+                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        [("content-type", "application/json")],
+                        response_body,
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!("OAuth facade: Failed to read token response for API {}: {}", api_name, e);
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        Err(e) => {
+            error!("OAuth facade: Token proxy failed for API {}: {}", api_name, e);
+            StatusCode::BAD_GATEWAY.into_response()
+        }
     }
 }
 
