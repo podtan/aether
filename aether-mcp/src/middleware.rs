@@ -1,7 +1,7 @@
 //! Authentication middleware for MCP endpoints
 
-use aether_auth::OidcValidator;
-use aether_config::{McpAuthConfig, OidcConfig};
+use pep::oidc::resource_server::ResourceServerClient;
+use aether_config::McpAuthConfig;
 use axum::{
     extract::State,
     http::{header, Request, StatusCode},
@@ -15,30 +15,30 @@ use tracing::{debug, info, warn};
 #[derive(Clone)]
 pub struct AuthMiddlewareState {
     pub config: McpAuthConfig,
-    pub validator: Option<Arc<OidcValidator>>,
+    pub validator: Arc<ResourceServerClient>,
 }
 
 impl AuthMiddlewareState {
-    pub async fn new(
-        config: McpAuthConfig,
-        oidc_config: Option<&OidcConfig>,
-    ) -> anyhow::Result<Self> {
-        let validator = if config.enabled {
-            let oidc = oidc_config.ok_or_else(|| {
-                anyhow::anyhow!("[oidc] config required when mcp_auth.enabled=true")
-            })?;
+    pub async fn new(config: McpAuthConfig) -> anyhow::Result<Self> {
+        if !config.enabled {
+            return Ok(Self {
+                config,
+                validator: Arc::new(ResourceServerClient::new()),
+            });
+        }
 
-            let issuer = config.issuer_url.as_deref().unwrap_or(&oidc.issuer_url);
+        let issuer_url = config.issuer_url
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("issuer_url required when mcp_auth.enabled=true"))?;
 
-            let validator =
-                OidcValidator::new(issuer, &oidc.client_id, &oidc.client_secret).await?;
+        let validator = ResourceServerClient::new();
 
-            Some(Arc::new(validator))
-        } else {
-            None
-        };
+        info!("Created auth middleware for issuer: {}", issuer_url);
 
-        Ok(Self { config, validator })
+        Ok(Self {
+            config,
+            validator: Arc::new(validator),
+        })
     }
 }
 
@@ -88,17 +88,25 @@ pub async fn mcp_auth_middleware(
         }
     };
 
-    // Validate token
-    let validator = auth_state
-        .validator
-        .as_ref()
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Get issuer URL from config
+    let issuer_url = match &auth_state.config.issuer_url {
+        Some(url) => url.clone(),
+        None => {
+            warn!("No issuer_url configured for auth");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
-    match validator.validate_bearer_token(token).await {
+    // Get client_id (audience) from config
+    let client_id = auth_state.config.audience.clone().unwrap_or_else(|| "unknown".to_string());
+
+    // Validate token using PEP's ResourceServerClient
+    match auth_state.validator.validate_jwt(token, &issuer_url, &client_id).await {
         Ok(claims) => {
             info!(
                 "MCP auth successful: user={} sub={}",
-                claims.email, claims.sub
+                claims.email.as_deref().unwrap_or("unknown"),
+                claims.sub
             );
 
             // Attach claims to request for downstream handlers
@@ -124,4 +132,67 @@ pub fn unauthorized_response() -> Response {
             .unwrap(),
     );
     response
+}
+
+/// Per-API authentication middleware for multi-config mode
+pub async fn per_api_auth_middleware(
+    State(app_state): State<crate::transport::MultiAppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Extract API name from path
+    let path = request.uri().path();
+    let api_name = extract_api_name(path);
+    
+    // Skip auth for public endpoints
+    if is_public_endpoint(path) {
+        debug!("Skipping auth for public endpoint: {}", path);
+        return Ok(next.run(request).await);
+    }
+    
+    // Get auth config for this API
+    let auth_state = if let Some(ref name) = api_name {
+        app_state.get_auth_config(name).await
+    } else {
+        None
+    };
+    
+    // If no auth configured for this API, allow request
+    let auth_state = match auth_state {
+        Some(state) => state,
+        None => {
+            debug!("No auth configured for API {:?}, allowing request", api_name);
+            return Ok(next.run(request).await);
+        }
+    };
+    
+    // Use existing auth validation logic
+    mcp_auth_middleware(State(auth_state), request, next).await
+}
+
+/// Extract API name from request path
+fn extract_api_name(path: &str) -> Option<String> {
+    // Path patterns: /{api_name}/sse, /{api_name}/message, etc.
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    
+    // First segment should be the API name (skip empty and special paths)
+    if segments.is_empty() {
+        return None;
+    }
+    
+    let first = segments[0];
+    
+    // Skip special paths
+    if first.is_empty() || first == "api" || first == "health" || first == "stats" {
+        return None;
+    }
+    
+    Some(first.to_string())
+}
+
+/// Check if endpoint should be public (no auth required)
+fn is_public_endpoint(path: &str) -> bool {
+    path.starts_with("/health") ||
+    path.starts_with("/api/") ||
+    path.ends_with("/.well-known/oauth-protected-resource")
 }

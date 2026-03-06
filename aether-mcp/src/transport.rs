@@ -91,7 +91,7 @@ impl HttpSseTransport {
 
         // Create auth middleware state if configured
         let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
-            Some(crate::middleware::AuthMiddlewareState::new(mcp_auth_config, oidc_config).await?)
+            Some(crate::middleware::AuthMiddlewareState::new(mcp_auth_config).await?)
         } else {
             None
         };
@@ -541,6 +541,7 @@ impl MultiConfigTransport {
             multi_server: self.multi_server.clone(),
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
+            auth_configs: Arc::new(RwLock::new(HashMap::new())),
         };
 
         // Create upload callback that uses the multi-config server
@@ -634,21 +635,41 @@ impl MultiConfigTransport {
     /// Start the HTTP server with multi-config support
     pub async fn start(
         self,
-        auth_config: Option<aether_config::McpAuthConfig>,
-        oidc_config: Option<&aether_config::OidcConfig>,
+        _auth_config: Option<aether_config::McpAuthConfig>,
+        _oidc_config: Option<&aether_config::OidcConfig>,
         _prm_config: Option<&aether_config::PrmConfig>,  // Not used in multi-config
     ) -> anyhow::Result<()> {
+        // Load per-API auth configurations
+        let mut auth_configs = HashMap::new();
+        let apis = self.multi_server.list_apis().await;
+        
+        for api_name in &apis {
+            if let Some(server) = self.multi_server.get_server(api_name).await {
+                let config = server.get_config().await;
+                if let Some(mcp_auth) = &config.mcp_auth {
+                    if mcp_auth.enabled {
+                        // Create auth middleware state for this API
+                        match crate::middleware::AuthMiddlewareState::new(
+                            mcp_auth.clone(),
+                        ).await {
+                            Ok(auth_state) => {
+                                info!("Enabled auth for API: {}", api_name);
+                                auth_configs.insert(api_name.clone(), auth_state);
+                            }
+                            Err(e) => {
+                                error!("Failed to create auth state for API {}: {}", api_name, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
         let multi_state = MultiAppState {
             multi_server: self.multi_server,
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
-        };
-
-        // Create auth middleware state if configured
-        let auth_middleware_state = if let Some(mcp_auth_config) = auth_config {
-            Some(crate::middleware::AuthMiddlewareState::new(mcp_auth_config, oidc_config).await?)
-        } else {
-            None
+            auth_configs: Arc::new(RwLock::new(auth_configs)),
         };
 
         let mut mcp_router = Router::new()
@@ -672,13 +693,11 @@ impl MultiConfigTransport {
             // Stats
             .route("/stats", get(handle_all_stats));
 
-        // Apply auth middleware to protected routes
-        if let Some(auth_state) = auth_middleware_state {
-            mcp_router = mcp_router.route_layer(axum::middleware::from_fn_with_state(
-                auth_state,
-                crate::middleware::mcp_auth_middleware,
-            ));
-        }
+        // Apply per-API auth middleware to protected routes
+        mcp_router = mcp_router.route_layer(axum::middleware::from_fn_with_state(
+            multi_state.clone(),
+            crate::middleware::per_api_auth_middleware,
+        ));
 
         // Health endpoint added AFTER auth middleware (remains public)
         mcp_router = mcp_router.route("/health", get(handle_multi_health));
@@ -712,6 +731,8 @@ pub struct MultiAppState {
     multi_server: Arc<MultiConfigServer>,
     sse_state: Arc<SseState>,
     web_state: WebState,
+    /// Per-API auth configurations
+    auth_configs: Arc<RwLock<HashMap<String, crate::middleware::AuthMiddlewareState>>>,
 }
 
 impl MultiAppState {
@@ -728,6 +749,11 @@ impl MultiAppState {
     /// Get PRM config for a specific API
     pub async fn get_prm_config(&self, api_name: &str) -> Option<aether_config::PrmConfig> {
         self.multi_server.get_prm_config(api_name).await
+    }
+
+    /// Get auth config for a specific API
+    pub async fn get_auth_config(&self, api_name: &str) -> Option<crate::middleware::AuthMiddlewareState> {
+        self.auth_configs.read().await.get(api_name).cloned()
     }
 
     /// Get all server statistics

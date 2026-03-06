@@ -30,7 +30,7 @@ pub mod server;
 pub mod transport;
 
 // Re-export core structures
-pub use middleware::{mcp_auth_middleware, AuthMiddlewareState};
+pub use middleware::{mcp_auth_middleware, per_api_auth_middleware, AuthMiddlewareState};
 pub use multi_server::MultiConfigServer;
 pub use transport::{HttpSseTransport, MultiConfigTransport, StdioTransport};
 
