@@ -722,16 +722,17 @@ impl MultiConfigTransport {
         // Spawn dedicated listeners for APIs with configured ports
         let dedicated_count = dedicated_apis.len();
         for (api_name, port) in dedicated_apis {
+            let bind_addr: SocketAddr = format!("{}:{}", self.bind_addr.ip(), port).parse()
+                .map_err(|e| anyhow::anyhow!("Invalid dedicated port address for {}: {}", api_name, e))?;
+            
             let dedicated_state = DedicatedApiState {
                 multi_server: self.multi_server.clone(),
                 sse_state: SseState::new(),
                 api_name: api_name.clone(),
                 auth_config: auth_configs.get(&api_name).cloned(),
                 oauth_facade: oauth_facades.get(&api_name).cloned(),
+                dedicated_port_url: format!("http://{}", bind_addr),
             };
-            
-            let bind_addr: SocketAddr = format!("{}:{}", self.bind_addr.ip(), port).parse()
-                .map_err(|e| anyhow::anyhow!("Invalid dedicated port address for {}: {}", api_name, e))?;
             
             info!("Starting dedicated listener for API {} on {}", api_name, bind_addr);
             
@@ -848,6 +849,7 @@ pub struct DedicatedApiState {
     pub api_name: String,
     pub auth_config: Option<crate::middleware::AuthMiddlewareState>,
     pub oauth_facade: Option<OAuthFacade>,
+    pub dedicated_port_url: String,
 }
 
 /// Create router for dedicated API port with root-level endpoints

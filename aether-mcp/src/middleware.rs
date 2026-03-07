@@ -297,8 +297,16 @@ pub async fn dedicated_api_auth_middleware(
         }
     };
     
-    // Use existing auth validation logic
-    mcp_auth_middleware(State(auth_state.clone()), request, next).await
+    // Create modified auth state with dedicated port URL for WWW-Authenticate header
+    let dedicated_auth_state = crate::middleware::AuthMiddlewareState {
+        config: auth_state.config.clone(),
+        validator: auth_state.validator.clone(),
+        server_base_url: Some(state.dedicated_port_url.clone()),
+        api_name: None,  // No API name in URL path for dedicated port (root-level)
+    };
+    
+    // Use existing auth validation logic with dedicated port URL
+    mcp_auth_middleware(State(dedicated_auth_state), request, next).await
 }
 
 /// Check if endpoint should be public (no auth required) on dedicated port
