@@ -695,26 +695,81 @@ impl MultiConfigTransport {
         }
         
         let multi_state = MultiAppState {
-            multi_server: self.multi_server,
+            multi_server: self.multi_server.clone(),
             sse_state: SseState::new(),
             web_state: self.web_state.clone(),
-            auth_configs: Arc::new(RwLock::new(auth_configs)),
-            oauth_facades: Arc::new(RwLock::new(oauth_facades)),
+            auth_configs: Arc::new(RwLock::new(auth_configs.clone())),
+            oauth_facades: Arc::new(RwLock::new(oauth_facades.clone())),
             server_base_url: format!("http://{}", self.bind_addr),
         };
+        
+        // Group APIs by dedicated vs shared
+        let mut dedicated_apis: Vec<(String, u16)> = Vec::new();
+        let mut shared_apis: Vec<String> = Vec::new();
+        
+        for api_name in &apis {
+            if let Some(server) = self.multi_server.get_server(api_name).await {
+                let config = server.get_config().await;
+                if let Some(port) = config.dedicated_port() {
+                    dedicated_apis.push((api_name.clone(), port));
+                    info!("API {} will use dedicated port {}", api_name, port);
+                } else {
+                    shared_apis.push(api_name.clone());
+                }
+            }
+        }
+        
+        // Spawn dedicated listeners for APIs with configured ports
+        let dedicated_count = dedicated_apis.len();
+        for (api_name, port) in dedicated_apis {
+            let dedicated_state = DedicatedApiState {
+                multi_server: self.multi_server.clone(),
+                sse_state: SseState::new(),
+                api_name: api_name.clone(),
+                auth_config: auth_configs.get(&api_name).cloned(),
+                oauth_facade: oauth_facades.get(&api_name).cloned(),
+            };
+            
+            let bind_addr: SocketAddr = format!("{}:{}", self.bind_addr.ip(), port).parse()
+                .map_err(|e| anyhow::anyhow!("Invalid dedicated port address for {}: {}", api_name, e))?;
+            
+            info!("Starting dedicated listener for API {} on {}", api_name, bind_addr);
+            
+            let dedicated_app = create_dedicated_api_router(dedicated_state);
+            
+            tokio::spawn(async move {
+                match tokio::net::TcpListener::bind(bind_addr).await {
+                    Ok(listener) => {
+                        if let Err(e) = axum::serve(listener, dedicated_app).await {
+                            error!("Dedicated listener error for API {}: {}", api_name, e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to bind dedicated port {} for API {}: {}", port, api_name, e);
+                    }
+                }
+            });
+        }
 
-        let mut mcp_router = Router::new()
-            // Legacy single-API endpoints (for backwards compatibility)
-            .route("/message", post(handle_single_message))
-            .route("/messages", post(handle_single_message))
-            .route("/sse", get(handle_single_sse))
-            // Multi-API endpoints
-            .route("/{api_name}/message", post(handle_multi_message))
-            .route("/{api_name}/messages", post(handle_multi_message))
-            .route("/{api_name}/sse", get(handle_multi_sse))
-            // Per-API PRM endpoint
-            .route("/{api_name}/.well-known/oauth-protected-resource", get(handle_api_prm))
-            // API management endpoints
+        let mut mcp_router = Router::new();
+        
+        // Only add shared API routes (skip dedicated APIs)
+        if !shared_apis.is_empty() {
+            mcp_router = mcp_router
+                // Legacy single-API endpoints (for backwards compatibility)
+                .route("/message", post(handle_single_message))
+                .route("/messages", post(handle_single_message))
+                .route("/sse", get(handle_single_sse))
+                // Multi-API endpoints for shared APIs
+                .route("/{api_name}/message", post(handle_multi_message))
+                .route("/{api_name}/messages", post(handle_multi_message))
+                .route("/{api_name}/sse", get(handle_multi_sse))
+                // Per-API PRM endpoint for shared APIs
+                .route("/{api_name}/.well-known/oauth-protected-resource", get(handle_api_prm));
+        }
+        
+        // API management endpoints (always on global port)
+        mcp_router = mcp_router
             .route("/api/generate-config", post(handle_generate_config))
             .route("/api/upload-openapi", post(handle_upload_openapi))
             .route("/api/list", get(handle_list_apis))
@@ -742,8 +797,10 @@ impl MultiConfigTransport {
             .with_state(multi_state);
 
         info!(
-            "Starting Multi-Config MCP HTTP server on {}",
-            self.bind_addr
+            "Starting Multi-Config MCP HTTP server on {} ({} shared APIs, {} dedicated APIs)",
+            self.bind_addr,
+            shared_apis.len(),
+            dedicated_count
         );
 
         let listener = tokio::net::TcpListener::bind(self.bind_addr)
@@ -781,6 +838,48 @@ impl OAuthFacade {
             issuer_url: oidc_config.issuer_url.clone(),
         })
     }
+}
+
+/// State for dedicated API listener (single API on dedicated port)
+#[derive(Clone)]
+pub struct DedicatedApiState {
+    pub multi_server: Arc<MultiConfigServer>,
+    pub sse_state: Arc<SseState>,
+    pub api_name: String,
+    pub auth_config: Option<crate::middleware::AuthMiddlewareState>,
+    pub oauth_facade: Option<OAuthFacade>,
+}
+
+/// Create router for dedicated API port with root-level endpoints
+fn create_dedicated_api_router(state: DedicatedApiState) -> Router {
+    let mut router = Router::new()
+        // Root-level MCP endpoints (VSCode expects these at root)
+        .route("/sse", get(handle_dedicated_sse))
+        .route("/message", post(handle_dedicated_message))
+        .route("/messages", post(handle_dedicated_message))
+        // Root-level OAuth endpoints (VSCode expects these at root)
+        .route("/authorize", get(handle_dedicated_oauth_authorize))
+        .route("/token", post(handle_dedicated_oauth_token))
+        // Root-level well-known endpoints
+        .route("/.well-known/oauth-protected-resource", get(handle_dedicated_prm))
+        .route("/.well-known/oauth-authorization-server", get(handle_dedicated_oauth_metadata))
+        .route("/.well-known/openid-configuration", get(handle_dedicated_oauth_metadata));
+    
+    // Apply auth middleware for protected endpoints
+    router = router.route_layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        crate::middleware::dedicated_api_auth_middleware,
+    ));
+    
+    // Health check (public, added after middleware)
+    router
+        .route("/health", get(handle_dedicated_health))
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(CorsLayer::permissive()),
+        )
+        .with_state(state)
 }
 
 /// Multi-app state for managing multiple configurations  
@@ -1326,6 +1425,349 @@ pub struct UploadRequest {
 struct UpdateConfigRequest {
     config: aether_config::AetherConfig,
     openapi_content: Option<String>,
+}
+
+// ============================================================================
+// Dedicated API Port Handlers (Root-Level Endpoints for VSCode)
+// ============================================================================
+
+/// Handle SSE connection on dedicated port (root-level /sse)
+pub async fn handle_dedicated_sse(
+    State(state): State<DedicatedApiState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<
+    (
+        axum::http::HeaderMap,
+        Sse<impl Stream<Item = Result<Event, Infallible>>>,
+    ),
+    StatusCode,
+> {
+    debug!("New SSE connection on dedicated port for API: {}", state.api_name);
+
+    // Verify API exists
+    if state.multi_server.get_server(&state.api_name).await.is_none() {
+        warn!("SSE connection requested for unknown API: {}", state.api_name);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let session_id = params
+        .get("session_id")
+        .map(|s| s.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "session_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            )
+        });
+
+    let session_key = format!("{}:{}", state.api_name, session_id);
+    info!(
+        "Establishing SSE connection for API {} (dedicated port) with session: {}",
+        state.api_name, session_key
+    );
+
+    let (tx, rx) = mpsc::unbounded_channel();
+
+    // Store the sender for this session
+    state
+        .sse_state
+        .connections
+        .write()
+        .await
+        .insert(session_key.clone(), tx.clone());
+
+    // Send endpoint event that client is waiting for (root-level path)
+    let endpoint_url = format!("/messages?session_id={}", session_id);
+    let endpoint_event = Event::default().event("endpoint").data(endpoint_url);
+
+    debug!(
+        "Sending endpoint event with URL: /messages?session_id={}",
+        session_id
+    );
+    if let Err(e) = tx.send(endpoint_event) {
+        error!("Failed to send endpoint event: {}", e);
+    }
+
+    // Create the stream
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(|event| Ok(event));
+
+    // Set headers for SSE
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-session-id", session_id.parse().unwrap());
+    headers.insert("cache-control", "no-cache".parse().unwrap());
+    headers.insert("connection", "keep-alive".parse().unwrap());
+    headers.insert("content-type", "text/event-stream".parse().unwrap());
+    headers.insert("access-control-allow-origin", "*".parse().unwrap());
+    headers.insert("access-control-allow-headers", "*".parse().unwrap());
+
+    Ok((
+        headers,
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30))),
+    ))
+}
+
+/// Handle MCP message on dedicated port (root-level /message or /messages)
+pub async fn handle_dedicated_message(
+    State(state): State<DedicatedApiState>,
+    Query(params): Query<HashMap<String, String>>,
+    Json(request): Json<McpRequest>,
+) -> Result<Json<Value>, StatusCode> {
+    debug!(
+        "Received MCP request for API {} (dedicated port): {}",
+        state.api_name, request.method
+    );
+
+    // Get the MCP server for this API
+    let server = state
+        .multi_server
+        .get_server(&state.api_name)
+        .await
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Check if this is a session-based request
+    if let Some(session_id) = params.get("session_id") {
+        let session_key = format!("{}:{}", state.api_name, session_id);
+        debug!("Handling POST message for session: {}", session_key);
+
+        // Handle the request
+        let response = server.handle_request(request).await;
+        debug!(
+            "Generated MCP response for API {} (dedicated port): {:?}",
+            state.api_name, response
+        );
+
+        // Send response via SSE if session exists
+        if let Ok(connections) = state.sse_state.connections.try_read() {
+            if let Some(sender) = connections.get(&session_key) {
+                let response_json = serde_json::to_string(&response).unwrap_or_default();
+                let event = Event::default()
+                    .event("message")
+                    .data(response_json.clone());
+
+                debug!("Sending JSON-RPC response via SSE for API {} (dedicated port)", state.api_name);
+
+                if let Err(e) = sender.send(event) {
+                    warn!(
+                        "Failed to send response to SSE session {}: {}",
+                        session_key, e
+                    );
+                } else {
+                    debug!("Sent MCP response to SSE session: {}", session_key);
+                }
+            } else {
+                warn!("SSE session not found: {}", session_key);
+            }
+        }
+
+        return Ok(Json(serde_json::json!({"status": "accepted"})));
+    }
+
+    // Non-session request - handle normally
+    let response = server.handle_request(request).await;
+    Ok(Json(serde_json::to_value(response).unwrap_or_default()))
+}
+
+/// Handle OAuth authorize on dedicated port (root-level /authorize)
+pub async fn handle_dedicated_oauth_authorize(
+    State(state): State<DedicatedApiState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    // Get OAuth facade for this API
+    let facade = match &state.oauth_facade {
+        Some(f) => f,
+        None => {
+            warn!("No OAuth facade configured for API: {}", state.api_name);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    
+    // Build redirect URL with all query parameters preserved
+    let query_string: String = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join("&");
+    
+    let redirect_url = if query_string.is_empty() {
+        facade.authorization_endpoint.clone()
+    } else {
+        format!("{}?{}", facade.authorization_endpoint, query_string)
+    };
+    
+    debug!(
+        "OAuth facade (dedicated port): Redirecting /authorize to {}",
+        redirect_url
+    );
+    
+    axum::response::Redirect::temporary(&redirect_url).into_response()
+}
+
+/// Handle OAuth token on dedicated port (root-level /token)
+pub async fn handle_dedicated_oauth_token(
+    State(state): State<DedicatedApiState>,
+    body: String,
+) -> impl IntoResponse {
+    // Get OAuth facade for this API
+    let facade = match &state.oauth_facade {
+        Some(f) => f,
+        None => {
+            warn!("No OAuth facade configured for API: {}", state.api_name);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    
+    debug!(
+        "OAuth facade (dedicated port): Proxying /token to {}",
+        facade.token_endpoint
+    );
+    
+    let client = reqwest::Client::new();
+    
+    match client
+        .post(&facade.token_endpoint)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.text().await {
+                Ok(response_body) => {
+                    debug!(
+                        "OAuth facade (dedicated port): Token proxy successful for API {} (status {})",
+                        state.api_name, status
+                    );
+                    (
+                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        [("content-type", "application/json")],
+                        response_body,
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!(
+                        "OAuth facade (dedicated port): Failed to read token response for API {}: {}",
+                        state.api_name, e
+                    );
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        Err(e) => {
+            error!(
+                "OAuth facade (dedicated port): Token proxy failed for API {}: {}",
+                state.api_name, e
+            );
+            StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
+}
+
+/// Handle PRM on dedicated port (root-level /.well-known/oauth-protected-resource)
+pub async fn handle_dedicated_prm(
+    State(state): State<DedicatedApiState>,
+) -> impl IntoResponse {
+    // Get the server for this API
+    let server = match state.multi_server.get_server(&state.api_name).await {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+    
+    // Get the config from the server
+    let config = server.get_config().await;
+    
+    // Get PRM config from the API's config
+    if let Some(prm) = &config.prm {
+        let pep_prm_config = pep::PrmConfig {
+            resource: prm.resource.clone(),
+            authorization_servers: prm.authorization_servers.clone(),
+            jwks_uri: prm.jwks_uri.clone(),
+            scopes_supported: prm.scopes_supported.clone(),
+            bearer_methods_supported: prm.bearer_methods_supported.clone(),
+            resource_signing_alg_values_supported: prm.resource_signing_alg_values_supported.clone(),
+            resource_name: prm.resource_name.clone(),
+            resource_documentation: prm.resource_documentation.clone(),
+            resource_policy_uri: prm.resource_policy_uri.clone(),
+            resource_tos_uri: prm.resource_tos_uri.clone(),
+        };
+        
+        let metadata: pep::ProtectedResourceMetadata = pep_prm_config.into();
+        match serde_json::to_string(&metadata) {
+            Ok(json) => ([("content-type", "application/json")], json).into_response(),
+            Err(e) => {
+                error!("Failed to serialize PRM for API {}: {}", state.api_name, e);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        }
+    } else {
+        debug!("No PRM config found for API: {}", state.api_name);
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+/// Handle OAuth metadata on dedicated port (root-level /.well-known/oauth-authorization-server)
+pub async fn handle_dedicated_oauth_metadata(
+    State(state): State<DedicatedApiState>,
+) -> impl IntoResponse {
+    // Get OAuth facade for this API
+    let facade = match &state.oauth_facade {
+        Some(f) => f,
+        None => {
+            warn!("No OAuth facade configured for API: {}", state.api_name);
+            return StatusCode::NOT_FOUND.into_response();
+        }
+    };
+    
+    // Fetch and return OAuth metadata from the actual authorization server
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        facade.issuer_url.trim_end_matches('/')
+    );
+    
+    let client = reqwest::Client::new();
+    
+    match client.get(&discovery_url).send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            match response.text().await {
+                Ok(body) => {
+                    (
+                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        [("content-type", "application/json")],
+                        body,
+                    )
+                        .into_response()
+                }
+                Err(e) => {
+                    error!("Failed to read OAuth metadata for API {}: {}", state.api_name, e);
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to fetch OAuth metadata for API {}: {}", state.api_name, e);
+            StatusCode::BAD_GATEWAY.into_response()
+        }
+    }
+}
+
+/// Health check for dedicated API port
+pub async fn handle_dedicated_health(
+    State(state): State<DedicatedApiState>,
+) -> Json<Value> {
+    let connection_count = state.sse_state.connections.read().await.len();
+
+    Json(serde_json::json!({
+        "status": "healthy",
+        "server": "aether-mcp-dedicated",
+        "version": env!("CARGO_PKG_VERSION"),
+        "api": state.api_name,
+        "sse_connections": connection_count
+    }))
 }
 
 /// Handle OAuth2 callback redirects by forwarding to the proper web auth callback

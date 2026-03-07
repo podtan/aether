@@ -16,11 +16,13 @@ pub mod openapi;
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AetherConfig {
-    pub server: ServerConfig,
+    #[serde(default)]
+    pub server: Option<ServerConfig>,
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
     #[serde(default)]
     pub enhanced_tools: HashMap<String, EnhancedToolConfig>,
+    #[serde(default)]
     pub apis: HashMap<String, ApiConfig>,
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
@@ -316,16 +318,19 @@ impl AetherConfig {
 
     /// Validate configuration
     pub fn validate(&self) -> Result<()> {
-        if self.server.host.is_empty() {
-            return Err(AetherError::Configuration(
-                "Server host cannot be empty".to_string(),
-            ));
-        }
+        // Only validate server config if present (optional in multi-config mode)
+        if let Some(server) = &self.server {
+            if server.host.is_empty() {
+                return Err(AetherError::Configuration(
+                    "Server host cannot be empty".to_string(),
+                ));
+            }
 
-        if self.server.port == 0 {
-            return Err(AetherError::Configuration(
-                "Server port must be greater than 0".to_string(),
-            ));
+            if server.port == 0 {
+                return Err(AetherError::Configuration(
+                    "Server port must be greater than 0".to_string(),
+                ));
+            }
         }
 
         for (name, api_config) in &self.apis {
@@ -356,7 +361,7 @@ impl AetherConfig {
     /// Create a default configuration
     pub fn new() -> Self {
         Self {
-            server: ServerConfig::default(),
+            server: None,
             tools: HashMap::new(),
             enhanced_tools: HashMap::new(),
             apis: HashMap::new(),
@@ -389,5 +394,11 @@ impl AetherConfig {
     /// Check if web authentication is configured (has OIDC, session, or dev config)
     pub fn has_web_authentication(&self) -> bool {
         self.oidc.is_some() || self.session.is_some() || self.dev.is_some()
+    }
+    
+    /// Get dedicated port if configured (for per-API dedicated listener)
+    /// Returns None if server block is absent or port is not specified
+    pub fn dedicated_port(&self) -> Option<u16> {
+        self.server.as_ref().map(|s| s.port)
     }
 }

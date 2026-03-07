@@ -86,7 +86,7 @@ pub async fn generate_config_from_openapi(
 
     // Create the configuration
     let config = AetherConfig {
-        server: ServerConfig::default(),
+        server: Some(ServerConfig::default()),
         tools: HashMap::new(), // Use enhanced_tools instead
         enhanced_tools,
         apis,

@@ -271,5 +271,40 @@ fn is_public_endpoint(path: &str) -> bool {
     path.ends_with("/authorize") ||
     path.ends_with("/token") ||
     path.ends_with("/.well-known/oauth-authorization-server") ||
-    path.ends_with("/.well-known/oauth-protected-resource")
+    path.ends_with("/.well-known/oauth-protected-resource") ||
+    path.ends_with("/.well-known/openid-configuration")
+}
+
+/// Authentication middleware for dedicated API ports (root-level endpoints)
+pub async fn dedicated_api_auth_middleware(
+    State(state): State<crate::transport::DedicatedApiState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Skip auth for public endpoints (root-level OAuth, health, etc.)
+    let path = request.uri().path();
+    if is_public_endpoint_dedicated(path) {
+        debug!("Skipping auth for public endpoint on dedicated port: {}", path);
+        return Ok(next.run(request).await);
+    }
+    
+    // Get auth config for this API
+    let auth_state = match &state.auth_config {
+        Some(auth_state) => auth_state,
+        None => {
+            debug!("No auth configured for API {}, allowing request", state.api_name);
+            return Ok(next.run(request).await);
+        }
+    };
+    
+    // Use existing auth validation logic
+    mcp_auth_middleware(State(auth_state.clone()), request, next).await
+}
+
+/// Check if endpoint should be public (no auth required) on dedicated port
+fn is_public_endpoint_dedicated(path: &str) -> bool {
+    path == "/health" ||
+    path == "/authorize" ||
+    path == "/token" ||
+    path.starts_with("/.well-known/")
 }
