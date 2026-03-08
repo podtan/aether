@@ -1715,45 +1715,32 @@ pub async fn handle_dedicated_prm(
 pub async fn handle_dedicated_oauth_metadata(
     State(state): State<DedicatedApiState>,
 ) -> impl IntoResponse {
-    // Get OAuth facade for this API
-    let facade = match &state.oauth_facade {
-        Some(f) => f,
+    let issuer_url = match &state.oauth_facade {
+        Some(f) => &f.issuer_url,
         None => {
             warn!("No OAuth facade configured for API: {}", state.api_name);
             return StatusCode::NOT_FOUND.into_response();
         }
     };
-    
-    // Fetch and return OAuth metadata from the actual authorization server
-    let discovery_url = format!(
-        "{}/.well-known/openid-configuration",
-        facade.issuer_url.trim_end_matches('/')
-    );
-    
-    let client = reqwest::Client::new();
-    
-    match client.get(&discovery_url).send().await {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            match response.text().await {
-                Ok(body) => {
-                    (
-                        StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                        [("content-type", "application/json")],
-                        body,
-                    )
-                        .into_response()
-                }
-                Err(e) => {
-                    error!("Failed to read OAuth metadata for API {}: {}", state.api_name, e);
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
+
+    if let Some(auth_config) = &state.auth_config {
+        match auth_config.validator.get_discovery_document_raw(issuer_url).await {
+            Ok(raw_json) => {
+                (
+                    StatusCode::OK,
+                    [("content-type", "application/json")],
+                    raw_json,
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                error!("Failed to fetch cached OAuth metadata for API {}: {}", state.api_name, e);
+                StatusCode::BAD_GATEWAY.into_response()
             }
         }
-        Err(e) => {
-            error!("Failed to fetch OAuth metadata for API {}: {}", state.api_name, e);
-            StatusCode::BAD_GATEWAY.into_response()
-        }
+    } else {
+        warn!("No auth config for API {}, cannot fetch discovery", state.api_name);
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 
