@@ -1577,7 +1577,6 @@ pub async fn handle_dedicated_oauth_authorize(
     State(state): State<DedicatedApiState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    // Get OAuth facade for this API
     let facade = match &state.oauth_facade {
         Some(f) => f,
         None => {
@@ -1586,10 +1585,9 @@ pub async fn handle_dedicated_oauth_authorize(
         }
     };
     
-    // Build redirect URL with all query parameters preserved
     let query_string: String = params
         .iter()
-        .map(|(k, v)| format!("{}={}", k, v))
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
         .collect::<Vec<_>>()
         .join("&");
     

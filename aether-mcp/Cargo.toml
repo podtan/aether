@@ -37,6 +37,7 @@ tokio-stream = "0.1"
 tower-sessions = "0.14"
 strsim = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots"], default-features = false }
+urlencoding = "2.1"
 
 [dev-dependencies]
 rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
