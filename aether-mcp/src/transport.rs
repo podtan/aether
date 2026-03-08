@@ -854,7 +854,7 @@ pub struct DedicatedApiState {
 
 /// Create router for dedicated API port with root-level endpoints
 fn create_dedicated_api_router(state: DedicatedApiState) -> Router {
-    let mut router = Router::new()
+    Router::new()
         // Root-level MCP endpoints (VSCode expects these at root)
         .route("/sse", get(handle_dedicated_sse))
         .route("/message", post(handle_dedicated_message))
@@ -865,17 +865,14 @@ fn create_dedicated_api_router(state: DedicatedApiState) -> Router {
         // Root-level well-known endpoints
         .route("/.well-known/oauth-protected-resource", get(handle_dedicated_prm))
         .route("/.well-known/oauth-authorization-server", get(handle_dedicated_oauth_metadata))
-        .route("/.well-known/openid-configuration", get(handle_dedicated_oauth_metadata));
-    
-    // Apply auth middleware for protected endpoints
-    router = router.route_layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        crate::middleware::dedicated_api_auth_middleware,
-    ));
-    
-    // Health check (public, added after middleware)
-    router
+        .route("/.well-known/openid-configuration", get(handle_dedicated_oauth_metadata))
+        // Health check (public - middleware handles it via is_public_endpoint_dedicated)
         .route("/health", get(handle_dedicated_health))
+        // Apply auth middleware (skips /health, /authorize, /token, /.well-known/*)
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::dedicated_api_auth_middleware,
+        ))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
