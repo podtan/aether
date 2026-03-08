@@ -17,7 +17,7 @@ aether-config = { path = "../aether-config" }
 aether-api = { path = "../aether-api" }
 aether-auth = { path = "../aether-auth" }
 aether-web = { path = "../aether-web" }
-pep = { path = "../../pep", features = ["rfc9728", "oidc-resource-server"] }
+pep = { version = "0.3", features = ["rfc9728", "oidc-resource-server"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
