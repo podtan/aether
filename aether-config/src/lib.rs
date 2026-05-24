@@ -60,6 +60,9 @@ pub struct ApiConfig {
 pub struct ApiAuthentication {
     #[serde(rename = "type")]
     pub auth_type: String,
+    /// Token value for bearer authentication (supports ${ENV_VAR} substitution)
+    pub token: Option<String>,
+    /// Custom headers for custom authentication (values support ${ENV_VAR} substitution)
     pub headers: Option<HashMap<String, String>>,
 }
 

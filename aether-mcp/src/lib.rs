@@ -731,6 +731,18 @@ impl McpServer {
         api_auth: &ApiAuthentication,
     ) -> std::result::Result<Authorization, AetherError> {
         let credentials = match api_auth.auth_type.as_str() {
+            "bearer" => {
+                let mut creds = HashMap::new();
+                if let Some(token) = &api_auth.token {
+                    let resolved = ApiAuthentication::resolve_env_var(token)?;
+                    creds.insert("token".to_string(), resolved);
+                } else {
+                    return Err(AetherError::Configuration(
+                        "Bearer authentication requires a 'token' field".to_string(),
+                    ));
+                }
+                creds
+            }
             "custom" => {
                 if let Some(headers) = &api_auth.headers {
                     // For custom auth, use the header values as credentials
