@@ -271,15 +271,42 @@ impl ApiAuthentication {
     }
 
     /// Resolve environment variables in format ${VAR_NAME}
+    ///
+    /// Handles both:
+    /// - Exact matches: "${VAR}" → replaces entire string
+    /// - Embedded refs: "Bearer ${TOKEN}" → substitutes in place
+    /// - Multiple refs: "User ${USER} token ${TOKEN}" → all resolved
     pub fn resolve_env_var(value: &str) -> Result<String> {
-        if value.starts_with("${") && value.ends_with("}") {
-            let env_var = &value[2..value.len() - 1];
-            std::env::var(env_var).map_err(|_| {
-                AetherError::Configuration(format!("Environment variable '{}' not found", env_var))
-            })
-        } else {
-            Ok(value.to_string())
+        let mut result = String::new();
+        let mut remaining = value;
+
+        while let Some(start) = remaining.find("${") {
+            // Push everything before the ${
+            result.push_str(&remaining[..start]);
+
+            // Find the closing }
+            let after_start = &remaining[start + 2..];
+            if let Some(end) = after_start.find('}') {
+                let var_name = &after_start[..end];
+                match std::env::var(var_name) {
+                    Ok(resolved) => result.push_str(&resolved),
+                    Err(_) => {
+                        return Err(AetherError::Configuration(format!(
+                            "Environment variable '{}' not found",
+                            var_name
+                        )))
+                    }
+                }
+                remaining = &after_start[end + 1..];
+            } else {
+                // No closing brace — keep as-is
+                result.push_str(&remaining[start..]);
+                remaining = "";
+            }
         }
+
+        result.push_str(remaining);
+        Ok(result)
     }
 }
 
