@@ -584,9 +584,34 @@ impl McpServer {
                         enhanced_tool.api_name
                     );
                     let auth_spec = api_auth.to_auth_spec()?;
-                    let authorization = self.create_authorization_from_api_auth(api_auth)?;
-                    debug!("✅ Auth spec created: {:?}", auth_spec);
-                    (Some(auth_spec), Some(authorization))
+
+                    if api_auth.auth_type == "passthrough" {
+                        // Passthrough: use the forwarded token from the MCP request
+                        if let Some(ref fwd) = authorization {
+                            if let Some(token) = fwd.credentials.get("token") {
+                                debug!("✅ Passthrough auth — using forwarded token for {}",
+                                    enhanced_tool.api_name);
+                                let mut creds = HashMap::new();
+                                creds.insert("token".to_string(), token.clone());
+                                (Some(auth_spec), Some(Authorization {
+                                    auth_type: "bearer".to_string(),
+                                    credentials: creds,
+                                }))
+                            } else {
+                                return Err(AetherError::Authentication(
+                                    "Passthrough auth requires a token".to_string(),
+                                ));
+                            }
+                        } else {
+                            return Err(AetherError::Authentication(
+                                "Passthrough auth requires a token".to_string(),
+                            ));
+                        }
+                    } else {
+                        let authorization = self.create_authorization_from_api_auth(api_auth)?;
+                        debug!("✅ Auth spec created: {:?}", auth_spec);
+                        (Some(auth_spec), Some(authorization))
+                    }
                 } else {
                     if let Some(auth) = authorization {
                         info!(
@@ -651,13 +676,38 @@ impl McpServer {
                 if let Some(api_auth) = &api_config.authentication {
                     info!("🔐 Creating authentication for API: {}", tool_def.api_name);
                     let auth_spec = api_auth.to_auth_spec()?;
-                    let authorization = self.create_authorization_from_api_auth(api_auth)?;
-                    debug!("✅ Auth spec created: {:?}", auth_spec);
-                    debug!(
-                        "✅ Authorization created with credentials: {:?}",
-                        authorization.credentials.keys().collect::<Vec<_>>()
-                    );
-                    (Some(auth_spec), Some(authorization))
+
+                    if api_auth.auth_type == "passthrough" {
+                        // Passthrough: use the forwarded token from the MCP request
+                        if let Some(ref fwd) = authorization {
+                            if let Some(token) = fwd.credentials.get("token") {
+                                debug!("✅ Passthrough auth — using forwarded token for {}",
+                                    tool_def.api_name);
+                                let mut creds = HashMap::new();
+                                creds.insert("token".to_string(), token.clone());
+                                (Some(auth_spec), Some(Authorization {
+                                    auth_type: "bearer".to_string(),
+                                    credentials: creds,
+                                }))
+                            } else {
+                                return Err(AetherError::Authentication(
+                                    "Passthrough auth requires a token".to_string(),
+                                ));
+                            }
+                        } else {
+                            return Err(AetherError::Authentication(
+                                "Passthrough auth requires a token".to_string(),
+                            ));
+                        }
+                    } else {
+                        let authorization = self.create_authorization_from_api_auth(api_auth)?;
+                        debug!("✅ Auth spec created: {:?}", auth_spec);
+                        debug!(
+                            "✅ Authorization created with credentials: {:?}",
+                            authorization.credentials.keys().collect::<Vec<_>>()
+                        );
+                        (Some(auth_spec), Some(authorization))
+                    }
                 } else {
                     if let Some(auth) = authorization {
                         info!(
