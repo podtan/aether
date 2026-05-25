@@ -40,6 +40,7 @@ impl AuthProcessor {
             }
             AuthType::Basic => Self::apply_basic_auth(request, authorization),
             AuthType::Custom { headers: _ } => Self::apply_custom_auth(request, authorization),
+            AuthType::Passthrough => Self::apply_passthrough_auth(request, authorization),
         }
     }
 
@@ -126,6 +127,19 @@ impl AuthProcessor {
         Ok(request.headers(headers))
     }
 
+    /// Apply passthrough authentication — forward the incoming Authorization header
+    fn apply_passthrough_auth(
+        request: reqwest::RequestBuilder,
+        authorization: &Authorization,
+    ) -> Result<reqwest::RequestBuilder> {
+        let token = authorization.credentials.get("token").ok_or_else(|| {
+            AetherError::Authentication("Passthrough: no token in credentials".to_string())
+        })?;
+
+        debug!("Applying passthrough authentication (forwarding token)");
+        Ok(request.header(AUTHORIZATION, format!("Bearer {}", token)))
+    }
+
     /// Validate that credentials match the auth spec requirements
     pub fn validate_credentials(auth_spec: &AuthSpec, authorization: &Authorization) -> Result<()> {
         if !auth_spec.required {
@@ -167,6 +181,13 @@ impl AuthProcessor {
                             header_name
                         )));
                     }
+                }
+            }
+            AuthType::Passthrough => {
+                if !authorization.credentials.contains_key("token") {
+                    return Err(AetherError::Authentication(
+                        "Passthrough auth requires a token".to_string(),
+                    ));
                 }
             }
         }

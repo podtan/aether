@@ -15,6 +15,10 @@ pub struct McpRequest {
     pub id: Option<Value>,
     pub method: String,
     pub params: Option<Value>,
+    /// Forwarded Authorization header from the incoming client request.
+    /// Set by the auth middleware when `type: "passthrough"` is used.
+    #[serde(skip)]
+    pub forwarded_authorization: Option<String>,
 }
 
 /// MCP Response message
@@ -52,6 +56,10 @@ pub struct CallToolParams {
     pub arguments: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization: Option<Authorization>,
+    /// Incoming Bearer token from the HTTP Authorization header (set by transport layer).
+    /// Used by `passthrough` auth to relay the client's token to the backend.
+    #[serde(skip)]
+    pub incoming_bearer: Option<String>,
 }
 
 impl McpResponse {

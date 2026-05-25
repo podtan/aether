@@ -259,6 +259,7 @@ impl ApiAuthentication {
             }
             "bearer" => AuthType::Bearer,
             "basic" => AuthType::Basic,
+            "passthrough" => AuthType::Passthrough,
             _ => {
                 return Err(AetherError::Configuration(format!(
                     "Unsupported authentication type: {}",

@@ -159,9 +159,15 @@ pub struct AppState {
 pub async fn handle_message(
     State(app_state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    Json(request): Json<McpRequest>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("Received MCP request via HTTP: {}", request.method);
+
+    // Inject forwarded Authorization header from middleware into MCP request
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
 
     // Check if this is a session-based request
     if let Some(session_id) = params.get("session_id") {
@@ -223,9 +229,14 @@ pub async fn handle_message(
 /// Handle MCP messages via POST /sse (for SSE clients that send requests via POST)
 pub async fn handle_sse_message(
     State(app_state): State<AppState>,
-    Json(request): Json<McpRequest>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
 ) -> Result<Json<Value>, StatusCode> {
     debug!("Received MCP request via SSE POST: {}", request.method);
+
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
 
     let response = app_state.server.handle_request(request).await;
 
@@ -939,8 +950,12 @@ pub async fn handle_multi_message(
     State(app_state): State<MultiAppState>,
     AxumPath(api_name): AxumPath<String>,
     Query(params): Query<HashMap<String, String>>,
-    Json(request): Json<McpRequest>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
 ) -> Result<Json<Value>, StatusCode> {
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
     handle_api_message(&app_state, &api_name, params, request).await
 }
 
@@ -1512,8 +1527,13 @@ pub async fn handle_dedicated_sse(
 pub async fn handle_dedicated_message(
     State(state): State<DedicatedApiState>,
     Query(params): Query<HashMap<String, String>>,
-    Json(request): Json<McpRequest>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
 ) -> Result<Json<Value>, StatusCode> {
+    // Inject forwarded Authorization header from middleware into MCP request
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
     debug!(
         "Received MCP request for API {} (dedicated port): {}",
         state.api_name, request.method

@@ -30,7 +30,7 @@ pub mod server;
 pub mod transport;
 
 // Re-export core structures
-pub use middleware::{mcp_auth_middleware, per_api_auth_middleware, AuthMiddlewareState};
+pub use middleware::{mcp_auth_middleware, per_api_auth_middleware, AuthMiddlewareState, ForwardedAuth};
 pub use multi_server::MultiConfigServer;
 pub use transport::{HttpSseTransport, MultiConfigTransport, StdioTransport};
 
@@ -166,7 +166,7 @@ impl McpServer {
                 Ok(result) => McpResponse::success(request.id, result),
                 Err(error) => McpResponse::error(request.id, McpError::from_aether_error(&error)),
             },
-            "tools/call" => match self.handle_call_tool(request.params).await {
+            "tools/call" => match self.handle_call_tool(request.params, request.forwarded_authorization).await {
                 Ok(result) => McpResponse::success(request.id, result),
                 Err(error) => McpResponse::error(request.id, McpError::from_aether_error(&error)),
             },
@@ -757,6 +757,12 @@ impl McpServer {
                     HashMap::new()
                 }
             }
+            "passthrough" => {
+                // Passthrough: token comes from forwarded Authorization header,
+                // not from config. Return empty credentials here; actual token
+                // is injected via forwarded_authorization in handle_call_tool.
+                HashMap::new()
+            }
             _ => HashMap::new(),
         };
 
@@ -887,6 +893,7 @@ impl McpServer {
     async fn handle_call_tool(
         &self,
         params: Option<Value>,
+        forwarded_authorization: Option<String>,
     ) -> std::result::Result<Value, AetherError> {
         let params_value = params
             .ok_or_else(|| AetherError::Mcp("Missing parameters for tools/call".to_string()))?;
@@ -894,9 +901,25 @@ impl McpServer {
         let params: CallToolParams = serde_json::from_value(params_value)
             .map_err(|e| AetherError::Mcp(format!("Invalid parameters: {}", e)))?;
 
+        // Build effective authorization:
+        // 1. MCP-level authorization from params (if client sends it)
+        // 2. Forwarded Authorization header from middleware (for passthrough auth)
+        let effective_auth = params.authorization.or_else(|| {
+            forwarded_authorization.map(|auth_header| {
+                // Parse "Bearer <token>" from the forwarded header
+                let token = auth_header.strip_prefix("Bearer ").unwrap_or(&auth_header).to_string();
+                let mut creds = HashMap::new();
+                creds.insert("token".to_string(), token);
+                Authorization {
+                    auth_type: "bearer".to_string(),
+                    credentials: creds,
+                }
+            })
+        });
+
         let arguments = params.arguments.unwrap_or_default();
         let response = self
-            .call_tool(&params.name, arguments, params.authorization)
+            .call_tool(&params.name, arguments, effective_auth)
             .await?;
 
         Ok(tool_response_to_mcp(response))

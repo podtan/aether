@@ -19,19 +19,21 @@ pub struct AuthSpec {
     pub required: bool,
 }
 
-/// Types of authentication supported
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthType {
-    Bearer,
-    ApiKey {
-        location: ApiKeyLocation,
-        name: String,
-    },
-    Basic,
-    Custom {
-        headers: HashMap<String, String>,
-    },
+    /// Types of authentication supported
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum AuthType {
+        Bearer,
+        ApiKey {
+            location: ApiKeyLocation,
+            name: String,
+        },
+        Basic,
+        Custom {
+            headers: HashMap<String, String>,
+        },
+        /// Passthrough authentication — forwards the client's Authorization header to the backend.
+        Passthrough,
 }
 
 /// Location for API key authentication
@@ -64,6 +66,26 @@ pub struct ToolResponse {
 pub struct Authorization {
     pub auth_type: String,
     pub credentials: HashMap<String, String>,
+}
+
+/// Incoming Authorization header captured from the HTTP request.
+/// Used by passthrough auth to forward the client's token to the backend.
+#[derive(Debug, Clone)]
+pub struct IncomingAuth {
+    /// The raw value of the Authorization header (e.g. "Bearer eyJ...")
+    pub header_value: String,
+}
+
+impl IncomingAuth {
+    /// Create from an HTTP Authorization header value.
+    pub fn new(header_value: String) -> Self {
+        Self { header_value }
+    }
+
+    /// Extract the token part (strip "Bearer " prefix).
+    pub fn bearer_token(&self) -> Option<&str> {
+        self.header_value.strip_prefix("Bearer ")
+    }
 }
 
 /// Source of parameter value (user-provided or server-provided)

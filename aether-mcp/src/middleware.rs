@@ -11,6 +11,11 @@ use axum::{
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+/// Extension that carries the forwarded Authorization header value
+/// from the incoming client request for use by the passthrough auth type.
+#[derive(Clone, Debug)]
+pub struct ForwardedAuth(pub String);
+
 /// Shared state for auth middleware
 #[derive(Clone)]
 pub struct AuthMiddlewareState {
@@ -81,6 +86,11 @@ pub async fn mcp_auth_middleware(
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok());
 
+    // Store the raw Bearer token in extensions for passthrough auth downstream
+    let raw_bearer = auth_header
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|t| t.to_string());
+
     let token = match auth_header {
         Some(header_value) => {
             // Parse "Bearer <token>"
@@ -136,9 +146,12 @@ pub async fn mcp_auth_middleware(
                 claims.sub
             );
 
-            // Attach claims to request for downstream handlers
+            // Attach claims and raw Bearer token to request for downstream handlers
             let mut request = request;
             request.extensions_mut().insert(claims);
+            if let Some(bearer) = raw_bearer {
+                request.extensions_mut().insert(ForwardedAuth(bearer));
+            }
 
             Ok(next.run(request).await)
         }
