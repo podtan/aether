@@ -715,14 +715,18 @@ impl MultiConfigTransport {
         };
         
         // Group APIs by dedicated vs shared
-        let mut dedicated_apis: Vec<(String, u16)> = Vec::new();
+        let mut dedicated_apis: Vec<(String, u16, String)> = Vec::new();
         let mut shared_apis: Vec<String> = Vec::new();
         
         for api_name in &apis {
             if let Some(server) = self.multi_server.get_server(api_name).await {
                 let config = server.get_config().await;
                 if let Some(port) = config.dedicated_port() {
-                    dedicated_apis.push((api_name.clone(), port));
+                    // Use public_url if configured, otherwise fall back to bind address
+                    let public_url = config.server.as_ref()
+                        .and_then(|s| s.public_url.clone())
+                        .unwrap_or_else(|| format!("http://{}:{}", self.bind_addr.ip(), port));
+                    dedicated_apis.push((api_name.clone(), port, public_url));
                     info!("API {} will use dedicated port {}", api_name, port);
                 } else {
                     shared_apis.push(api_name.clone());
@@ -732,7 +736,7 @@ impl MultiConfigTransport {
         
         // Spawn dedicated listeners for APIs with configured ports
         let dedicated_count = dedicated_apis.len();
-        for (api_name, port) in dedicated_apis {
+        for (api_name, port, public_url) in dedicated_apis {
             let bind_addr: SocketAddr = format!("{}:{}", self.bind_addr.ip(), port).parse()
                 .map_err(|e| anyhow::anyhow!("Invalid dedicated port address for {}: {}", api_name, e))?;
             
@@ -742,7 +746,7 @@ impl MultiConfigTransport {
                 api_name: api_name.clone(),
                 auth_config: auth_configs.get(&api_name).cloned(),
                 oauth_facade: oauth_facades.get(&api_name).cloned(),
-                dedicated_port_url: format!("http://{}", bind_addr),
+                dedicated_port_url: public_url,
             };
             
             info!("Starting dedicated listener for API {} on {}", api_name, bind_addr);

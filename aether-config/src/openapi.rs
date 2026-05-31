@@ -241,6 +241,36 @@ fn get_effective_schema<'a>(schema: &'a Value, spec: &'a Value) -> &'a Value {
     schema
 }
 
+/// Recursively resolve all `$ref` references in a schema, including those nested
+/// inside `oneOf`, `anyOf`, and `allOf` constructs.  Returns an owned `Value`
+/// that is safe to store without borrowing the original spec.
+fn resolve_schema_recursive(schema: &Value, spec: &Value) -> Value {
+    // If this schema is a $ref, resolve it and recurse into the result
+    if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str()) {
+        if let Some(resolved) = resolve_ref(spec, ref_path) {
+            return resolve_schema_recursive(resolved, spec);
+        }
+    }
+
+    let mut result = schema.clone();
+
+    // Walk oneOf / anyOf / allOf arrays and resolve each variant recursively
+    for keyword in &["oneOf", "anyOf", "allOf"] {
+        if let Some(variants) = schema.get(keyword).and_then(|v| v.as_array()) {
+            let resolved_variants: Vec<Value> = variants
+                .iter()
+                .map(|v| resolve_schema_recursive(v, spec))
+                .collect();
+            result
+                .as_object_mut()
+                .unwrap()
+                .insert((*keyword).to_string(), Value::Array(resolved_variants));
+        }
+    }
+
+    result
+}
+
 fn extract_request_body_parameters(
     operation: &serde_json::Map<String, Value>,
     spec: &Value,
@@ -270,8 +300,8 @@ fn extract_request_body_parameters(
                             .unwrap_or_default();
 
                         for (name, property_schema) in properties {
-                            // Resolve $ref in individual property schemas
-                            let resolved_schema = get_effective_schema(property_schema, spec).clone();
+                            // Resolve $ref in individual property schemas (including inside oneOf/anyOf/allOf)
+                            let resolved_schema = resolve_schema_recursive(property_schema, spec);
                             parameters.push(Parameter {
                                 name: name.clone(),
                                 param_type: "form".to_string(), // Mark as form parameter
@@ -304,8 +334,8 @@ fn extract_request_body_parameters(
                             .unwrap_or_default();
 
                         for (name, property_schema) in properties {
-                            // Resolve $ref in individual property schemas
-                            let resolved_schema = get_effective_schema(property_schema, spec).clone();
+                            // Resolve $ref in individual property schemas (including inside oneOf/anyOf/allOf)
+                            let resolved_schema = resolve_schema_recursive(property_schema, spec);
                             parameters.push(Parameter {
                                 name: name.clone(),
                                 param_type: "body".to_string(), // Mark as body parameter

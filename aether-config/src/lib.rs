@@ -44,6 +44,11 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub log_level: String,
+    /// Public-facing URL for this server (e.g., https://test.aether.example.com)
+    /// Used for WWW-Authenticate headers and OAuth metadata.
+    /// If not set, defaults to http://{host}:{port}
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 /// API configuration
@@ -320,6 +325,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8080,
             log_level: "info".to_string(),
+            public_url: None,
         }
     }
 }
