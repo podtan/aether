@@ -633,9 +633,10 @@ impl McpServer {
             };
 
         info!(
-            "🚀 Executing enhanced operation: {} with params: {:?}",
-            enhanced_tool.operation_id, arguments
+            "🚀 Executing enhanced operation: {}",
+            enhanced_tool.operation_id
         );
+        debug!("📝 Parameters: {:?}", arguments);
 
         // Execute the operation
         let response = api_client
@@ -729,9 +730,10 @@ impl McpServer {
             };
 
         info!(
-            "🚀 Executing operation: {} with params: {:?}",
-            tool_def.operation.operation_id, arguments
+            "🚀 Executing operation: {}",
+            tool_def.operation.operation_id
         );
+        debug!("📝 Parameters: {:?}", arguments);
 
         // Execute the operation
         let response = api_client
