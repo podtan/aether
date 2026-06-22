@@ -1,0 +1,12 @@
+.git
+.gitignore
+# target/  # allow pre-built binary
+*.md
+*.log
+.env
+.DS_Store
+scripts/
+debug_client.rs
+test_config.yaml
+configs/
+examples/
