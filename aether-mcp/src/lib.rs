@@ -992,7 +992,7 @@ impl McpServer {
 
         // Return server capabilities
         Ok(serde_json::json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-06-18",
             "capabilities": {
                 "tools": {
                     "listChanged": false

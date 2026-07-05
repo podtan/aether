@@ -226,25 +226,34 @@ pub async fn handle_message(
     }
 }
 
-/// Handle MCP messages via POST /sse (for SSE clients that send requests via POST)
+/// Handle MCP messages via POST /sse (Streamable HTTP transport).
+///
+/// For requests with a JSON-RPC `id`, returns `200 OK` with the JSON-RPC
+/// response body. For notifications (no `id`), returns `202 Accepted` with no
+/// body, as required by the MCP Streamable HTTP specification.
 pub async fn handle_sse_message(
     State(app_state): State<AppState>,
     forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
     Json(mut request): Json<McpRequest>,
-) -> Result<Json<Value>, StatusCode> {
-    debug!("Received MCP request via SSE POST: {}", request.method);
+) -> axum::response::Response {
+    debug!("Received MCP request via Streamable HTTP POST /sse: {}", request.method);
 
     if let Some(axum::Extension(auth)) = forwarded_auth {
         request.forwarded_authorization = Some(auth.0);
     }
 
+    let is_notification = request.is_notification();
     let response = app_state.server.handle_request(request).await;
 
+    if is_notification {
+        return StatusCode::ACCEPTED.into_response();
+    }
+
     match serde_json::to_value(&response) {
-        Ok(value) => Ok(Json(value)),
+        Ok(value) => Json(value).into_response(),
         Err(e) => {
             error!("Failed to serialize response: {}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
@@ -618,10 +627,12 @@ impl MultiConfigTransport {
             .route("/message", post(handle_single_message))
             .route("/messages", post(handle_single_message))
             .route("/sse", get(handle_single_sse))
+            .route("/sse", post(handle_single_sse_message)) // Streamable HTTP
             // Multi-API endpoints
             .route("/{api_name}/message", post(handle_multi_message))
             .route("/{api_name}/messages", post(handle_multi_message))
             .route("/{api_name}/sse", get(handle_multi_sse))
+            .route("/{api_name}/sse", post(handle_multi_sse_message)) // Streamable HTTP
             // API management endpoints
             .route("/api/generate-config", post(handle_generate_config))
             .route("/api/upload-openapi", post(handle_upload_openapi))
@@ -776,10 +787,12 @@ impl MultiConfigTransport {
                 .route("/message", post(handle_single_message))
                 .route("/messages", post(handle_single_message))
                 .route("/sse", get(handle_single_sse))
+                .route("/sse", post(handle_single_sse_message)) // Streamable HTTP
                 // Multi-API endpoints for shared APIs
                 .route("/{api_name}/message", post(handle_multi_message))
                 .route("/{api_name}/messages", post(handle_multi_message))
                 .route("/{api_name}/sse", get(handle_multi_sse))
+                .route("/{api_name}/sse", post(handle_multi_sse_message)) // Streamable HTTP
                 // Per-API PRM endpoint for shared APIs
                 .route("/{api_name}/.well-known/oauth-protected-resource", get(handle_api_prm));
         }
@@ -872,6 +885,7 @@ fn create_dedicated_api_router(state: DedicatedApiState) -> Router {
     Router::new()
         // Root-level MCP endpoints (VSCode expects these at root)
         .route("/sse", get(handle_dedicated_sse))
+        .route("/sse", post(handle_dedicated_sse_message)) // Streamable HTTP
         .route("/message", post(handle_dedicated_message))
         .route("/messages", post(handle_dedicated_message))
         // Root-level OAuth endpoints (VSCode expects these at root)
@@ -1042,6 +1056,78 @@ pub async fn handle_single_sse(
         handle_multi_sse(State(app_state), AxumPath(first_api.clone()), Query(params)).await
     } else {
         Err(StatusCode::SERVICE_UNAVAILABLE)
+    }
+}
+
+/// Handle single-API POST /sse (Streamable HTTP transport — backwards compatibility).
+///
+/// Routes to the first available API, same as `handle_single_sse` does for GET.
+pub async fn handle_single_sse_message(
+    State(app_state): State<MultiAppState>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
+) -> axum::response::Response {
+    debug!("Received Streamable HTTP POST /sse (single-API mode): {}", request.method);
+
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
+
+    let apis = app_state.multi_server.list_apis().await;
+    let first_api = match apis.first() {
+        Some(api) => api.clone(),
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    handle_streamable_http_request(&app_state, &first_api, request).await
+}
+
+/// Handle multi-API POST /sse (Streamable HTTP transport).
+pub async fn handle_multi_sse_message(
+    State(app_state): State<MultiAppState>,
+    AxumPath(api_name): AxumPath<String>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
+) -> axum::response::Response {
+    debug!(
+        "Received Streamable HTTP POST /{}/sse: {}",
+        api_name, request.method
+    );
+
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
+
+    handle_streamable_http_request(&app_state, &api_name, request).await
+}
+
+/// Common Streamable HTTP request handler for multi-config transport.
+///
+/// Dispatches through the per-API `McpServer`, returning the JSON-RPC response
+/// inline (`200 OK` + JSON body) or `202 Accepted` for notifications.
+async fn handle_streamable_http_request(
+    app_state: &MultiAppState,
+    api_name: &str,
+    request: McpRequest,
+) -> axum::response::Response {
+    let server = match app_state.multi_server.get_server(api_name).await {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let is_notification = request.is_notification();
+    let response = server.handle_request(request).await;
+
+    if is_notification {
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    match serde_json::to_value(&response) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => {
+            error!("Failed to serialize Streamable HTTP response for API {}: {}", api_name, e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 
@@ -1525,6 +1611,48 @@ pub async fn handle_dedicated_sse(
         headers,
         Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(30))),
     ))
+}
+
+/// Handle MCP message on dedicated port via POST /sse (Streamable HTTP transport).
+///
+/// Returns the JSON-RPC response inline (`200 OK`) or `202 Accepted` for
+/// notifications.
+pub async fn handle_dedicated_sse_message(
+    State(state): State<DedicatedApiState>,
+    forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
+    Json(mut request): Json<McpRequest>,
+) -> axum::response::Response {
+    debug!(
+        "Received Streamable HTTP POST /sse for API {} (dedicated port): {}",
+        state.api_name, request.method
+    );
+
+    if let Some(axum::Extension(auth)) = forwarded_auth {
+        request.forwarded_authorization = Some(auth.0);
+    }
+
+    let server = match state.multi_server.get_server(&state.api_name).await {
+        Some(s) => s,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let is_notification = request.is_notification();
+    let response = server.handle_request(request).await;
+
+    if is_notification {
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    match serde_json::to_value(&response) {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => {
+            error!(
+                "Failed to serialize Streamable HTTP response for API {} (dedicated): {}",
+                state.api_name, e
+            );
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// Handle MCP message on dedicated port (root-level /message or /messages)

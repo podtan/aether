@@ -21,6 +21,15 @@ pub struct McpRequest {
     pub forwarded_authorization: Option<String>,
 }
 
+impl McpRequest {
+    /// Returns true if this request is a JSON-RPC notification (no `id` field
+    /// and method starts with `notifications/`). Per the MCP Streamable HTTP
+    /// spec, notifications should receive a `202 Accepted` response with no body.
+    pub fn is_notification(&self) -> bool {
+        self.id.is_none() && self.method.starts_with("notifications/")
+    }
+}
+
 /// MCP Response message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpResponse {
