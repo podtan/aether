@@ -18,4 +18,4 @@ ENV RUST_LOG=info
 
 EXPOSE 8000
 
-CMD ["./aether", "--config", "/app/config.toml"]
+ENTRYPOINT ["./aether"]
