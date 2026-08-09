@@ -19,6 +19,10 @@ pub struct McpRequest {
     /// Set by the auth middleware when `type: "passthrough"` is used.
     #[serde(skip)]
     pub forwarded_authorization: Option<String>,
+    /// Instance ID extracted from the URL path (e.g. /{instance_id}/sse).
+    /// When set, injected as X-Instance-Id header on all outgoing API calls.
+    #[serde(skip)]
+    pub instance_id: Option<String>,
 }
 
 impl McpRequest {

@@ -166,7 +166,7 @@ impl McpServer {
                 Ok(result) => McpResponse::success(request.id, result),
                 Err(error) => McpResponse::error(request.id, McpError::from_aether_error(&error)),
             },
-            "tools/call" => match self.handle_call_tool(request.params, request.forwarded_authorization).await {
+            "tools/call" => match self.handle_call_tool(request.params, request.forwarded_authorization, request.instance_id).await {
                 Ok(result) => McpResponse::success(request.id, result),
                 Err(error) => McpResponse::error(request.id, McpError::from_aether_error(&error)),
             },
@@ -396,6 +396,7 @@ impl McpServer {
         tool_name: &str,
         arguments: HashMap<String, Value>,
         authorization: Option<Authorization>,
+        instance_id: Option<&str>,
     ) -> Result<ToolResponse, AetherError> {
         info!("🔧 Calling tool: {}", tool_name);
 
@@ -408,7 +409,7 @@ impl McpServer {
         if let Some(enhanced_tool) = config.enhanced_tools.get(tool_name) {
             info!("📋 Found enhanced tool definition for: {}", tool_name);
             return self
-                .call_enhanced_tool(enhanced_tool, arguments, authorization)
+                .call_enhanced_tool(enhanced_tool, arguments, authorization, instance_id)
                 .await;
         }
 
@@ -421,7 +422,7 @@ impl McpServer {
                 tool_name, tool_def.api_name
             );
             return self
-                .call_regular_tool(&tool_def, arguments, authorization)
+                .call_regular_tool(&tool_def, arguments, authorization, instance_id)
                 .await;
         }
 
@@ -512,6 +513,7 @@ impl McpServer {
         enhanced_tool: &aether_core::types::EnhancedToolConfig,
         mut arguments: HashMap<String, Value>,
         authorization: Option<Authorization>,
+        instance_id: Option<&str>,
     ) -> Result<ToolResponse, AetherError> {
         info!("🚀 Executing enhanced tool: {}", enhanced_tool.name);
 
@@ -645,6 +647,7 @@ impl McpServer {
                 &arguments,
                 effective_auth_spec.as_ref(),
                 effective_authorization.as_ref(),
+                instance_id,
             )
             .await?;
 
@@ -662,6 +665,7 @@ impl McpServer {
         tool_def: &ToolDefinition,
         arguments: HashMap<String, Value>,
         authorization: Option<Authorization>,
+        instance_id: Option<&str>,
     ) -> Result<ToolResponse, AetherError> {
         // Get the API client and configuration
         let api_clients = self.api_clients.read().await;
@@ -742,6 +746,7 @@ impl McpServer {
                 &arguments,
                 effective_auth_spec.as_ref(),
                 effective_authorization.as_ref(),
+                instance_id,
             )
             .await?;
 
@@ -946,6 +951,7 @@ impl McpServer {
         &self,
         params: Option<Value>,
         forwarded_authorization: Option<String>,
+        request_instance_id: Option<String>,
     ) -> std::result::Result<Value, AetherError> {
         let params_value = params
             .ok_or_else(|| AetherError::Mcp("Missing parameters for tools/call".to_string()))?;
@@ -971,7 +977,7 @@ impl McpServer {
 
         let arguments = params.arguments.unwrap_or_default();
         let response = self
-            .call_tool(&params.name, arguments, effective_auth)
+            .call_tool(&params.name, arguments, effective_auth, request_instance_id.as_deref())
             .await?;
 
         Ok(tool_response_to_mcp(response))

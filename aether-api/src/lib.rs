@@ -36,6 +36,7 @@ impl ApiClient {
         parameters: &HashMap<String, Value>,
         auth_spec: Option<&AuthSpec>,
         authorization: Option<&Authorization>,
+        instance_id: Option<&str>,
     ) -> Result<ToolResponse> {
         info!("🚀 Executing operation: {}", operation.operation_id);
         debug!("📝 Parameters: {:?}", parameters);
@@ -44,6 +45,12 @@ impl ApiClient {
 
         // Build the request
         let mut request = self.build_request(operation, parameters)?;
+
+        // Inject X-Instance-Id header for multi-tenant routing
+        if let Some(id) = instance_id {
+            request = request.header("X-Instance-Id", id);
+            debug!("🏠 Injected X-Instance-Id: {}", id);
+        }
 
         // Apply authentication if required
         if let (Some(auth_spec), Some(authorization)) = (auth_spec, authorization) {

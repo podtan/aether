@@ -888,6 +888,11 @@ fn create_dedicated_api_router(state: DedicatedApiState) -> Router {
         .route("/sse", post(handle_dedicated_sse_message)) // Streamable HTTP
         .route("/message", post(handle_dedicated_message))
         .route("/messages", post(handle_dedicated_message))
+        // Instance-scoped MCP endpoints (dynamic multi-tenant routing)
+        .route("/{instance_id}/sse", get(handle_dedicated_sse))
+        .route("/{instance_id}/sse", post(handle_dedicated_sse_message))
+        .route("/{instance_id}/message", post(handle_dedicated_message))
+        .route("/{instance_id}/messages", post(handle_dedicated_message))
         // Root-level OAuth endpoints (VSCode expects these at root)
         .route("/authorize", get(handle_dedicated_oauth_authorize))
         .route("/token", post(handle_dedicated_oauth_token))
@@ -1535,9 +1540,10 @@ struct UpdateConfigRequest {
 // Dedicated API Port Handlers (Root-Level Endpoints for VSCode)
 // ============================================================================
 
-/// Handle SSE connection on dedicated port (root-level /sse)
+/// Handle SSE connection on dedicated port (root-level /sse or /{instance_id}/sse)
 pub async fn handle_dedicated_sse(
     State(state): State<DedicatedApiState>,
+    instance_id: Option<AxumPath<String>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<
     (
@@ -1546,7 +1552,9 @@ pub async fn handle_dedicated_sse(
     ),
     StatusCode,
 > {
-    debug!("New SSE connection on dedicated port for API: {}", state.api_name);
+    // Determine the instance_id for session keying and endpoint URL
+    let inst = instance_id.map(|p| p.0);
+    debug!("New SSE connection on dedicated port for API: {} (instance: {:?})", state.api_name, inst);
 
     // Verify API exists
     if state.multi_server.get_server(&state.api_name).await.is_none() {
@@ -1584,12 +1592,16 @@ pub async fn handle_dedicated_sse(
         .insert(session_key.clone(), tx.clone());
 
     // Send endpoint event that client is waiting for (root-level path)
-    let endpoint_url = format!("/messages?session_id={}", session_id);
-    let endpoint_event = Event::default().event("endpoint").data(endpoint_url);
+    // Include instance_id in path if present for multi-tenant routing
+    let endpoint_url = match &inst {
+        Some(id) => format!("/{}/messages?session_id={}", id, session_id),
+        None => format!("/messages?session_id={}", session_id),
+    };
+    let endpoint_event = Event::default().event("endpoint").data(endpoint_url.clone());
 
     debug!(
-        "Sending endpoint event with URL: /messages?session_id={}",
-        session_id
+        "Sending endpoint event with URL: {}",
+        endpoint_url
     );
     if let Err(e) = tx.send(endpoint_event) {
         error!("Failed to send endpoint event: {}", e);
@@ -1613,18 +1625,22 @@ pub async fn handle_dedicated_sse(
     ))
 }
 
-/// Handle MCP message on dedicated port via POST /sse (Streamable HTTP transport).
+/// Handle Streamable HTTP POST /sse for dedicated port.
 ///
-/// Returns the JSON-RPC response inline (`200 OK`) or `202 Accepted` for
-/// notifications.
+/// If the URL contains an instance_id (e.g. POST /{instance_id}/sse),
+/// it is extracted and threaded into the MCP request for multi-tenant routing.
 pub async fn handle_dedicated_sse_message(
     State(state): State<DedicatedApiState>,
+    instance_id: Option<AxumPath<String>>,
     forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
     Json(mut request): Json<McpRequest>,
 ) -> axum::response::Response {
+    // Extract instance_id from URL path if present
+    request.instance_id = instance_id.map(|p| p.0);
+
     debug!(
-        "Received Streamable HTTP POST /sse for API {} (dedicated port): {}",
-        state.api_name, request.method
+        "Received Streamable HTTP POST /sse for API {} (dedicated port): {} (instance: {:?})",
+        state.api_name, request.method, request.instance_id
     );
 
     if let Some(axum::Extension(auth)) = forwarded_auth {
@@ -1656,12 +1672,19 @@ pub async fn handle_dedicated_sse_message(
 }
 
 /// Handle MCP message on dedicated port (root-level /message or /messages)
+///
+/// If the URL contains an instance_id (e.g. /{instance_id}/messages),
+/// it is extracted and threaded into the MCP request for multi-tenant routing.
 pub async fn handle_dedicated_message(
     State(state): State<DedicatedApiState>,
+    instance_id: Option<AxumPath<String>>,
     Query(params): Query<HashMap<String, String>>,
     forwarded_auth: Option<axum::Extension<crate::middleware::ForwardedAuth>>,
     Json(mut request): Json<McpRequest>,
 ) -> Result<Json<Value>, StatusCode> {
+    // Extract instance_id from URL path if present
+    request.instance_id = instance_id.map(|p| p.0);
+
     // Inject forwarded Authorization header from middleware into MCP request
     if let Some(axum::Extension(auth)) = forwarded_auth {
         request.forwarded_authorization = Some(auth.0);
