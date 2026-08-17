@@ -12,6 +12,69 @@ use serde_json::Value;
 use std::collections::HashMap;
 use tracing::info;
 
+/// Recursively scan a JSON value for any remaining `$ref` pointers, returning
+/// the list of pointer values found (empty when clean).
+fn find_remaining_refs(value: &Value, path: &str, acc: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, sub) in map {
+                if key == "$ref" {
+                    if let Some(pointer) = sub.as_str() {
+                        acc.push(format!("{} -> {}", path, pointer));
+                    }
+                } else {
+                    find_remaining_refs(sub, &format!("{}.{}", path, key), acc);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (idx, sub) in items.iter().enumerate() {
+                find_remaining_refs(sub, &format!("{}[{}]", path, idx), acc);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Assert that a generated config contains no unresolvable `$ref` pointers.
+///
+/// MCP tool parameters travel as a standalone JSON document with no
+/// `components` section, so any surviving `#/components/...` pointer can never
+/// resolve downstream and breaks strict JSON-Schema consumers (e.g.
+/// llama-server rejects the whole tools payload with HTTP 400).  This turns
+/// what used to be a silent generator gap into a loud failure at generation
+/// time.
+fn assert_no_unresolved_refs(enhanced_tools: &HashMap<String, EnhancedToolConfig>) -> Result<()> {
+    let mut offending: Vec<String> = Vec::new();
+
+    for (tool_name, tool) in enhanced_tools {
+        for param in &tool.parameters {
+            let mut refs = Vec::new();
+            find_remaining_refs(&param.schema, "", &mut refs);
+            for r in refs {
+                offending.push(format!("{}.{}: {}", tool_name, param.name, r));
+            }
+        }
+    }
+
+    if offending.is_empty() {
+        return Ok(());
+    }
+
+    let details = offending
+        .iter()
+        .map(|s| format!("  - {}", s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(AetherError::Configuration(format!(
+        "Generated config contains {} unresolvable $ref pointer(s) in tool parameter schemas. \
+         MCP tool schemas must be self-contained; a $ref would break strict JSON-Schema \
+         consumers downstream. Offending locations:\n{}",
+        offending.len(),
+        details
+    )))
+}
+
 /// Generate Aether configuration from OpenAPI specification content
 pub async fn generate_config_from_openapi(
     openapi_content: &str,
@@ -71,6 +134,9 @@ pub async fn generate_config_from_openapi(
         "✅ Generated {} enhanced tools with parameter source analysis",
         enhanced_tools.len()
     );
+
+    // Fail loudly if any $ref survived resolution — see assert_no_unresolved_refs.
+    assert_no_unresolved_refs(&enhanced_tools)?;
 
     // Create API configuration
     let mut apis = HashMap::new();

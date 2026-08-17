@@ -3,7 +3,7 @@
 use aether_core::{AetherError, Result};
 use serde_json::Value;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 /// OpenAPI specification loader and processor
 #[derive(Debug, Clone)]
@@ -196,8 +196,9 @@ fn extract_parameters(
                     .unwrap_or(&Value::Object(serde_json::Map::new()))
                     .clone();
 
-                // Resolve $ref in schema if present
-                let resolved_schema = get_effective_schema(&schema, spec).clone();
+                // Resolve $ref anywhere in the schema (top level, items,
+                // nested properties, oneOf/anyOf/allOf variants, ...)
+                let resolved_schema = resolve_schema_recursive(&schema, spec);
 
                 parameters.push(Parameter {
                     name,
@@ -241,31 +242,111 @@ fn get_effective_schema<'a>(schema: &'a Value, spec: &'a Value) -> &'a Value {
     schema
 }
 
-/// Recursively resolve all `$ref` references in a schema, including those nested
-/// inside `oneOf`, `anyOf`, and `allOf` constructs.  Returns an owned `Value`
-/// that is safe to store without borrowing the original spec.
+/// Maximum schema nesting depth before inlining gives up.  Guards against
+/// infinitely recursive schemas (self-referencing `$ref`s) blowing the stack.
+const MAX_SCHEMA_DEPTH: usize = 32;
+
+/// Recursively resolve all `$ref` references anywhere in a schema.
+///
+/// Recurses into *every* schema-bearing keyword — `oneOf`/`anyOf`/`allOf`
+/// variants, `items`/`prefixItems` (array elements), `properties`/
+/// `additionalProperties` (object members) and the remaining compositional
+/// keywords (`not`, `if`/`then`/`else`, `contains`, `propertyNames`,
+/// `unevaluatedItems`, `unevaluatedProperties`).
+///
+/// The returned `Value` is fully self-contained (no `$ref` pointers remain,
+/// modulo the depth guard) and safe to embed in MCP tool `inputSchema`
+/// documents, which have no `components` section to resolve against.
 fn resolve_schema_recursive(schema: &Value, spec: &Value) -> Value {
+    resolve_schema_depth(schema, spec, 0)
+}
+
+fn resolve_schema_depth(schema: &Value, spec: &Value, depth: usize) -> Value {
+    // Depth guard: recursive schemas (A -> B -> A) cannot be fully inlined.
+    // Give up and emit a permissive schema instead of recursing forever.
+    if depth > MAX_SCHEMA_DEPTH {
+        warn!(
+            "Schema nesting exceeds {} levels (likely recursive $ref); emitting permissive schema",
+            MAX_SCHEMA_DEPTH
+        );
+        return serde_json::json!({});
+    }
+
     // If this schema is a $ref, resolve it and recurse into the result
     if let Some(ref_path) = schema.get("$ref").and_then(|r| r.as_str()) {
         if let Some(resolved) = resolve_ref(spec, ref_path) {
-            return resolve_schema_recursive(resolved, spec);
+            return resolve_schema_depth(resolved, spec, depth + 1);
         }
+        // Unresolvable external ref — leave as-is; the post-generation
+        // assertion in generator.rs will surface it loudly.
     }
 
     let mut result = schema.clone();
 
-    // Walk oneOf / anyOf / allOf arrays and resolve each variant recursively
-    for keyword in &["oneOf", "anyOf", "allOf"] {
+    // Array-valued compositional keywords: oneOf / anyOf / allOf / prefixItems
+    for keyword in &["oneOf", "anyOf", "allOf", "prefixItems"] {
         if let Some(variants) = schema.get(keyword).and_then(|v| v.as_array()) {
             let resolved_variants: Vec<Value> = variants
                 .iter()
-                .map(|v| resolve_schema_recursive(v, spec))
+                .map(|v| resolve_schema_depth(v, spec, depth + 1))
                 .collect();
             result
                 .as_object_mut()
                 .unwrap()
                 .insert((*keyword).to_string(), Value::Array(resolved_variants));
         }
+    }
+
+    // Single-schema keywords: items / not / if / then / else / contains /
+    // propertyNames / unevaluatedItems / unevaluatedProperties
+    for keyword in &[
+        "items",
+        "not",
+        "if",
+        "then",
+        "else",
+        "contains",
+        "propertyNames",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    ] {
+        if let Some(sub) = schema.get(keyword) {
+            // `additionalProperties`-style keywords may be a bare boolean
+            // ("no restrictions") — only recurse into actual schemas.
+            if sub.is_object() {
+                let resolved = resolve_schema_depth(sub, spec, depth + 1);
+                result
+                    .as_object_mut()
+                    .unwrap()
+                    .insert((*keyword).to_string(), resolved);
+            }
+        }
+    }
+
+    // `additionalProperties`: may be a schema object or a boolean
+    if let Some(additional) = schema.get("additionalProperties") {
+        if additional.is_object() {
+            let resolved = resolve_schema_depth(additional, spec, depth + 1);
+            result
+                .as_object_mut()
+                .unwrap()
+                .insert("additionalProperties".to_string(), resolved);
+        }
+    }
+
+    // `properties`: map of property name -> schema
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        let mut resolved_properties = serde_json::Map::new();
+        for (name, property_schema) in properties {
+            resolved_properties.insert(
+                name.clone(),
+                resolve_schema_depth(property_schema, spec, depth + 1),
+            );
+        }
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("properties".to_string(), Value::Object(resolved_properties));
     }
 
     result
