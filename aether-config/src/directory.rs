@@ -142,8 +142,26 @@ impl ConfigDirectoryManager {
             ))
         })?;
 
+        // Generation api_name: prefer the apis key from the hand-curated
+        // config over the directory name.  Directory names sometimes carry
+        // deployment suffixes (e.g. "nghr_auth") that must NOT leak into
+        // tool prefixes (tools are "nghr_*", not "nghr_auth_*").  Falls
+        // back to the directory name when no apis block is declared.
+        let gen_api_name = config
+            .apis
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| api_name.to_string());
+        if &gen_api_name != api_name {
+            info!(
+                "API '{}': generating tools with api_name '{}' (from apis key, dir name differs)",
+                api_name, gen_api_name
+            );
+        }
+
         // Locate sibling OpenAPI spec (by convention) and derive tools.
-        match find_spec_file(&api_dir, api_name).await {
+        match find_spec_file(&api_dir, &gen_api_name).await {
             Some(spec_path) => {
                 let openapi_content = fs::read_to_string(&spec_path).await.map_err(|e| {
                     AetherError::Configuration(format!(
@@ -157,7 +175,7 @@ impl ConfigDirectoryManager {
                 // discard when the hand-curated config declares its own —
                 // so an empty placeholder is fine here.
                 let generated =
-                    generate_config_from_openapi(&openapi_content, api_name, "").await?;
+                    generate_config_from_openapi(&openapi_content, &gen_api_name, "").await?;
 
                 if !config.enhanced_tools.is_empty() {
                     info!(

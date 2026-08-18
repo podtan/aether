@@ -150,10 +150,21 @@ async fn spec_with_ref_leak_fails_at_load() {
         json!({"$ref": "https://example.com/other.json#/Foo"});
 
     tokio::fs::create_dir_all(&api_dir).await.unwrap();
+    // Spec name must match the apis key ("bad"), not the dir name.
     tokio::fs::write(api_dir.join("bad-openapi.yaml"), spec.to_string())
         .await
         .unwrap();
-    tokio::fs::write(api_dir.join("config.yaml"), hand_config_yaml())
+    let bad_yaml = r#"server:
+  host: 127.0.0.1
+  port: 8001
+  log_level: info
+apis:
+  bad:
+    base_url: http://localhost:9999
+    openapi_spec: ''
+    timeout: 30
+"#;
+    tokio::fs::write(api_dir.join("config.yaml"), bad_yaml)
         .await
         .unwrap();
 
@@ -221,7 +232,17 @@ async fn spec_overrides_inline_tools_when_both_present() {
     let _ = tokio::fs::remove_dir_all(&tmp).await;
 
     // Both spec and inline tools: spec wins (single source of truth).
-    let mut yaml = hand_config_yaml();
+    let mut yaml = r#"server:
+  host: 127.0.0.1
+  port: 8001
+  log_level: info
+apis:
+  both:
+    base_url: http://localhost:9998
+    openapi_spec: ''
+    timeout: 30
+"#
+    .to_string();
     yaml.push_str(
         r#"enhanced_tools:
   both_stale:
@@ -240,9 +261,63 @@ async fn spec_overrides_inline_tools_when_both_present() {
 
     let manager = ConfigDirectoryManager::new(tmp.join("apis"));
     let (config, _) = manager.load_api_config("both").await.expect("must load");
+    // apis key is "pdt" (hand_config_yaml), so tools are pdt_*
     assert_eq!(config.enhanced_tools.len(), 2, "spec-derived tools win");
     assert!(!config.enhanced_tools.contains_key("both_stale"));
     assert!(config.enhanced_tools.contains_key("both_getThing"));
+
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+}
+
+#[tokio::test]
+async fn dir_suffix_does_not_leak_into_tool_prefix() {
+    // Deployment reality: dirs named "nghr_auth"/"pdt_auth" while tools are
+    // "nghr_*"/"pdt_*".  The apis key must drive the generation api_name,
+    // NOT the directory name.
+    let tmp = std::env::temp_dir().join(format!("aether-test-sfx-{}", std::process::id()));
+    let api_dir = tmp.join("apis/nghr_auth");
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+
+    // Spec named after the apis key (nghr), not the dir (nghr_auth).
+    let mut spec: serde_json::Value = serde_json::from_str(&openapi_spec()).unwrap();
+    // Trim to a single operation for clarity
+    spec["paths"] = json!({
+        "/ping": {"get": {"operationId": "ping", "responses": {"200": {"description": "OK"}}}}
+    });
+
+    let yaml = r#"server:
+  host: 127.0.0.1
+  port: 8007
+  log_level: info
+apis:
+  nghr:
+    base_url: http://localhost:3004
+    openapi_spec: ''
+    timeout: 30
+"#;
+
+    tokio::fs::create_dir_all(&api_dir).await.unwrap();
+    tokio::fs::write(api_dir.join("nghr-openapi.json"), spec.to_string())
+        .await
+        .unwrap();
+    tokio::fs::write(api_dir.join("config.yaml"), yaml).await.unwrap();
+
+    let manager = ConfigDirectoryManager::new(tmp.join("apis"));
+    let (config, _) = manager.load_api_config("nghr_auth").await.expect("must load");
+
+    // Tool prefix must be "nghr_ping", NOT "nghr_auth_ping"
+    assert!(
+        config.enhanced_tools.contains_key("nghr_ping"),
+        "expected nghr_ping, got: {:?}",
+        config.enhanced_tools.keys().collect::<Vec<_>>()
+    );
+    assert!(!config.enhanced_tools.contains_key("nghr_auth_ping"));
+
+    // Base URL from hand-curated apis survives
+    assert_eq!(
+        config.apis.get("nghr").unwrap().base_url,
+        "http://localhost:3004"
+    );
 
     let _ = tokio::fs::remove_dir_all(&tmp).await;
 }
