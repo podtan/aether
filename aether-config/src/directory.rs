@@ -1,10 +1,49 @@
 //! Directory structure management for multiple API configurations
+//!
+//! Per-API directory layout (v2 — spec-driven):
+//!
+//! ```text
+//! configs/<api>/
+//!   <api>-openapi.yaml   # machine: OpenAPI spec (curl'd from the service)
+//!   config.yaml          # human: server, apis, oidc, mcp_auth, prm, ...
+//! ```
+//!
+//! `config.yaml` is purely hand-curated; `enhanced_tools` are derived from
+//! the sibling OpenAPI spec at load time (in-memory).  Spec discovery by
+//! convention: `<api>-openapi.{yaml,yml,json}` first, falling back to
+//! `openapi.{yaml,yml,json}` for pre-rename directories.  When a spec is
+//! present the loader regenerates the tools through the same generator the
+//! CLI uses — including the no-unresolved-`$ref` assertion — so bad specs
+//! fail loudly at boot rather than poisoning MCP tool schemas downstream.
 
+use crate::generator::generate_config_from_openapi;
 use crate::AetherConfig;
 use aether_core::{AetherError, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+/// Candidate OpenAPI spec filenames, in preference order.
+const SPEC_FILENAME_PATTERNS: [&str; 6] = [
+    "{api}-openapi.yaml",
+    "{api}-openapi.yml",
+    "{api}-openapi.json",
+    "openapi.yaml",
+    "openapi.yml",
+    "openapi.json",
+];
+
+/// Find the OpenAPI spec file for an API directory, by convention.
+async fn find_spec_file(api_dir: &Path, api_name: &str) -> Option<PathBuf> {
+    for pattern in SPEC_FILENAME_PATTERNS {
+        let filename = pattern.replace("{api}", api_name);
+        let candidate = api_dir.join(&filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
 
 /// Configuration directory manager
 pub struct ConfigDirectoryManager {
@@ -57,8 +96,9 @@ impl ConfigDirectoryManager {
             AetherError::Configuration(format!("Failed to write config file: {}", e))
         })?;
 
-        // Save OpenAPI spec
-        let openapi_path = api_dir.join("openapi.yaml");
+        // Save OpenAPI spec under the conventional name so the loader's
+        // spec-discovery finds it (preferred over the legacy "openapi.yaml").
+        let openapi_path = api_dir.join(format!("{}-openapi.yaml", api_name));
         fs::write(&openapi_path, openapi_content)
             .await
             .map_err(|e| {
@@ -73,6 +113,12 @@ impl ConfigDirectoryManager {
     }
 
     /// Load an API configuration from its directory
+    ///
+    /// Parses the hand-curated `config.yaml`, then — when a sibling OpenAPI
+    /// spec exists — regenerates `enhanced_tools` from it in-memory.  This
+    /// keeps generated tool definitions out of the hand-maintained file
+    /// (no clobbering on regeneration) while remaining a drop-in for
+    /// configs that still carry inline `enhanced_tools`.
     pub async fn load_api_config(&self, api_name: &str) -> Result<(AetherConfig, String)> {
         let api_dir = self.base_path.join(api_name);
 
@@ -89,14 +135,71 @@ impl ConfigDirectoryManager {
             AetherError::Configuration(format!("Failed to read config file: {}", e))
         })?;
 
-        let config: AetherConfig = serde_yaml::from_str(&config_content)
-            .map_err(|e| AetherError::Configuration(format!("Failed to parse config: {}", e)))?;
+        let mut config: AetherConfig = serde_yaml::from_str(&config_content).map_err(|e| {
+            AetherError::Configuration(format!(
+                "Failed to parse config for '{}': {}",
+                api_name, e
+            ))
+        })?;
 
-        // Load OpenAPI spec
-        let openapi_path = api_dir.join("openapi.yaml");
-        let openapi_content = fs::read_to_string(&openapi_path).await.unwrap_or_default(); // OpenAPI file is optional
+        // Locate sibling OpenAPI spec (by convention) and derive tools.
+        match find_spec_file(&api_dir, api_name).await {
+            Some(spec_path) => {
+                let openapi_content = fs::read_to_string(&spec_path).await.map_err(|e| {
+                    AetherError::Configuration(format!(
+                        "Failed to read OpenAPI spec {}: {}",
+                        spec_path.display(),
+                        e
+                    ))
+                })?;
 
-        Ok((config, openapi_content))
+                // base_url only feeds the generated apis block, which we
+                // discard when the hand-curated config declares its own —
+                // so an empty placeholder is fine here.
+                let generated =
+                    generate_config_from_openapi(&openapi_content, api_name, "").await?;
+
+                if !config.enhanced_tools.is_empty() {
+                    info!(
+                        "API '{}': deriving {} tools from {} (ignoring {} inline enhanced_tools)",
+                        api_name,
+                        generated.enhanced_tools.len(),
+                        spec_path.display(),
+                        config.enhanced_tools.len()
+                    );
+                } else {
+                    info!(
+                        "API '{}': derived {} tools from {}",
+                        api_name,
+                        generated.enhanced_tools.len(),
+                        spec_path.display()
+                    );
+                }
+                config.enhanced_tools = generated.enhanced_tools;
+                config.tools = std::collections::HashMap::new();
+
+                // Keep the hand-curated apis block (base_url, auth, timeout);
+                // fall back to the generated one if the config omitted it.
+                if config.apis.is_empty() {
+                    config.apis = generated.apis;
+                }
+
+                Ok((config, openapi_content))
+            }
+            None => {
+                // No spec file: legacy layout.  config.yaml must carry its
+                // own enhanced_tools (checked by AetherConfig::validate).
+                if config.enhanced_tools.is_empty() && !config.apis.is_empty() {
+                    warn!(
+                        "API '{}': no OpenAPI spec found in {} and config.yaml has no \
+                         enhanced_tools — tools will be empty",
+                        api_name,
+                        api_dir.display()
+                    );
+                }
+                Ok((config, String::new()))
+            }
+        }
     }
 
     /// List all configured APIs

@@ -7,7 +7,7 @@ use aether_core::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::info;
+use tracing::{info, warn};
 
 pub mod directory;
 pub mod generator;
@@ -378,17 +378,23 @@ impl AetherConfig {
                 )));
             }
 
-            // Only require openapi_spec if there are no enhanced tools for this API
+            // openapi_spec may be empty when either (a) enhanced tools are
+            // provided inline (legacy layout) or (b) tools are derived from
+            // a sibling spec file at load time (spec-driven layout, see
+            // directory::ConfigDirectoryManager).  The directory loader
+            // enforces (b) itself; here we only guard the legacy case.
             let has_enhanced_tools_for_api = self
                 .enhanced_tools
                 .values()
                 .any(|tool| tool.api_name == *name);
 
             if api_config.openapi_spec.is_empty() && !has_enhanced_tools_for_api {
-                return Err(AetherError::Configuration(format!(
-                    "API '{}' openapi_spec cannot be empty unless enhanced tools are provided",
+                warn!(
+                    "API '{}': openapi_spec is empty and no inline enhanced_tools — \
+                     ensure a sibling <api>-openapi.yaml exists (spec-driven layout) \
+                     or tools will be empty",
                     name
-                )));
+                );
             }
         }
 
