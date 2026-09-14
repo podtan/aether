@@ -13,14 +13,53 @@ use std::path::PathBuf;
 use tokio::process::Command;
 
 /// Test configuration path  
-const TEST_CONFIG_PATH: &str = "examples/aether-config/config-jsonplaceholder.yaml";
+// Absolute paths: cargo test runs with the PACKAGE dir as CWD, and the
+    // example configs + the built binary live at the workspace root.
+const TEST_CONFIG_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../examples/configs/jsonplaceholder/config.yaml"
+);
+const AETHER_BIN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/debug/aether");
+
+struct KillOnDrop(tokio::process::Child);
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.start_kill();
+    }
+}
 
 #[tokio::test]
 async fn test_rmcp_sse_client_connection() -> Result<()> {
     println!("🔍 Testing rmcp SSE client connection to our server...");
 
+    // HERMETIC: spawn OUR server (HTTP mode, port from the test config) —
+    // the old form connected to a manually-started localhost:8000.
+    let mut child = KillOnDrop(
+        Command::new(AETHER_BIN)
+            .arg("--config")
+            .arg(TEST_CONFIG_PATH)
+            .spawn()?,
+    );
+    let http = reqwest::Client::new();
+    let mut up = false;
+    for _ in 0..50 {
+        if http
+            .get("http://127.0.0.1:9000/health")
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+        {
+            up = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(up, "spawned aether server did not come up on :9000");
+    let _ = &mut child;
+
     // This test replicates exactly what the user's client code does
-    let server_url = "http://localhost:8000/sse";
+    let server_url = "http://127.0.0.1:9000/sse";
 
     println!("   🔗 Attempting to connect to: {}", server_url);
     println!("   🔍 Debug: About to call SseClientTransport::start()...");
@@ -90,7 +129,7 @@ async fn test_server_initialization_with_rmcp() -> Result<()> {
     // Create a client that connects to our aether server via stdio
     let client = ()
         .serve(TokioChildProcess::new(
-            Command::new("target/debug/aether").configure(|cmd| {
+            Command::new(AETHER_BIN).configure(|cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
             }),
         )?)
@@ -112,7 +151,7 @@ async fn test_server_initialization_with_rmcp() -> Result<()> {
 async fn test_tools_list_with_rmcp() -> Result<()> {
     let client = ()
         .serve(TokioChildProcess::new(
-            Command::new("target/debug/aether").configure(|cmd| {
+            Command::new(AETHER_BIN).configure(|cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
             }),
         )?)
@@ -157,7 +196,7 @@ async fn test_tools_list_with_rmcp() -> Result<()> {
 async fn test_tool_call_get_users_with_rmcp() -> Result<()> {
     let client = ()
         .serve(TokioChildProcess::new(
-            Command::new("target/debug/aether").configure(|cmd| {
+            Command::new(AETHER_BIN).configure(|cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
             }),
         )?)
@@ -186,7 +225,7 @@ async fn test_tool_call_get_users_with_rmcp() -> Result<()> {
 async fn test_tool_call_get_posts_with_params() -> Result<()> {
     let client = ()
         .serve(TokioChildProcess::new(
-            Command::new("target/debug/aether").configure(|cmd| {
+            Command::new(AETHER_BIN).configure(|cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
             }),
         )?)
@@ -215,7 +254,7 @@ async fn test_tool_call_get_posts_with_params() -> Result<()> {
 #[tokio::test]
 async fn test_server_direct() -> Result<()> {
     // Load test configuration
-    let config_path = PathBuf::from("examples/aether-config/config-jsonplaceholder.yaml");
+    let config_path = PathBuf::from(TEST_CONFIG_PATH);
     let config = AetherConfig::load_from_file(&config_path).await?;
 
     // Create server directly
@@ -265,14 +304,17 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
 
     // Create a minimal test config to avoid file dependencies
     let config = aether_config::AetherConfig {
-        server: aether_config::ServerConfig {
+        server: Some(aether_config::ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8080,
             log_level: "info".to_string(),
-        },
+            public_url: None,
+        }),
         apis: std::collections::HashMap::new(),
         tools: std::collections::HashMap::new(),
         enhanced_tools: std::collections::HashMap::new(),
+        pinned_tools: Vec::new(),
+        prm: None,
         oidc: None,
         session: None,
         dev: None,
@@ -297,6 +339,8 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
             "capabilities": {},
             "clientInfo": {"name": "rmcp test client", "version": "0.1.0"}
         })),
+        forwarded_authorization: None,
+        instance_id: None,
     };
 
     let response = server.handle_request(test_request).await;
@@ -319,8 +363,8 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
             "Should include capabilities"
         );
         assert_eq!(
-            result["protocolVersion"], "2024-11-05",
-            "Should match protocol version"
+            result["protocolVersion"], "2025-06-18",
+            "Should match the current MCP protocol version (rmcp 0.3)"
         );
 
         // Check server info matches what we expect
@@ -339,6 +383,8 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
         id: Some(serde_json::Value::Number(2.into())),
         method: "tools/list".to_string(),
         params: Some(serde_json::json!({})),
+        forwarded_authorization: None,
+        instance_id: None,
     };
 
     let tools_response = server.handle_request(tools_request).await;
@@ -370,6 +416,8 @@ async fn test_mcp_protocol_implementation() -> Result<()> {
         id: Some(serde_json::Value::Number(3.into())),
         method: "initialized".to_string(),
         params: Some(serde_json::json!({})),
+        forwarded_authorization: None,
+        instance_id: None,
     };
 
     let initialized_response = server.handle_request(initialized_request).await;

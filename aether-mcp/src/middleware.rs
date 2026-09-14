@@ -146,9 +146,22 @@ pub async fn mcp_auth_middleware(
                 claims.sub
             );
 
-            // Attach claims and raw Bearer token to request for downstream handlers
+            // Attach claims and raw Bearer token to request for downstream
+            // handlers. Handlers read aether_auth::oidc::UserClaims (the
+            // shape the OIDC-login flow established) — build it from the
+            // validated JWT claims; dropping this insertion is exactly the
+            // regression the revived integration tests caught.
+            let user_claims = aether_auth::oidc::UserClaims {
+                sub: claims.sub.clone(),
+                email: claims.email.clone().unwrap_or_else(|| "unknown@example.com".to_string()),
+                name: claims
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "Unknown User".to_string()),
+                preferred_username: None,
+            };
             let mut request = request;
-            request.extensions_mut().insert(claims);
+            request.extensions_mut().insert(user_claims);
             if let Some(bearer) = raw_bearer {
                 request.extensions_mut().insert(ForwardedAuth(bearer));
             }

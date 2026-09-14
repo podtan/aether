@@ -61,7 +61,7 @@ async fn test_auth_disabled_allows_all_requests() {
         audience: None,
     };
 
-    let auth_state = AuthMiddlewareState::new(config, None)
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state with disabled config");
 
@@ -74,6 +74,63 @@ async fn test_auth_disabled_allows_all_requests() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+
+/// Mount a real JWKS endpoint on the mock IdP and mint a REAL RS256 token
+/// for it — the middleware validates signatures via discovery since the
+/// PEP port; a static "valid_token" string cannot survive real validation.
+async fn serve_jwks_and_mint(mock_server: &MockServer, sub: &str, email: &str) -> String {
+    use rsa::pkcs8::EncodePrivateKey;
+    use rsa::traits::PublicKeyParts;
+
+    fn b64url(bytes: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    let mut rng = rand::rngs::OsRng;
+    let key = rsa::RsaPrivateKey::new(&mut rng, 2048).expect("rsa keygen");
+    let pem = key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).expect("pem");
+    let enc = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes()).expect("encoding key");
+    let pub_key = rsa::RsaPublicKey::from(&key);
+    let n = b64url(&pub_key.n().to_bytes_be());
+    let e = b64url(&pub_key.e().to_bytes_be());
+
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "keys": [json!({
+                "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-key", "n": n, "e": e,
+            })]
+        })))
+        .mount(mock_server)
+        .await;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = json!({
+        "iss": mock_server.uri(),
+        "sub": sub,
+        "aud": "unknown",
+        "email": email,
+        "groups": ["test"],
+        "role": "user",
+        "iat": now,
+        "exp": now + 3600,
+    });
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header {
+            alg: jsonwebtoken::Algorithm::RS256,
+            kid: Some("test-key".to_string()),
+            ..Default::default()
+        },
+        &claims,
+        &enc,
+    )
+    .expect("mint test token")
 }
 
 #[tokio::test]
@@ -96,7 +153,7 @@ async fn test_auth_enabled_valid_token() {
         enabled: true,
         require_auth: true,
         public_health: true,
-        issuer_url: None,
+        issuer_url: Some(mock_server.uri()),
         audience: None,
     };
 
@@ -110,7 +167,7 @@ async fn test_auth_enabled_valid_token() {
         scope: "openid email profile".to_string(),
     };
 
-    let auth_state = AuthMiddlewareState::new(config, Some(&oidc_config))
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state");
 
@@ -118,10 +175,11 @@ async fn test_auth_enabled_valid_token() {
         .route("/test", get(protected_handler))
         .layer(from_fn_with_state(auth_state, mcp_auth_middleware));
 
-    // Request with valid token should succeed
+    // Request with a REAL minted token should succeed
+    let token = serve_jwks_and_mint(&mock_server, "user123", "user@example.com").await;
     let request = Request::builder()
         .uri("/test")
-        .header(header::AUTHORIZATION, "Bearer valid_token")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
 
@@ -147,7 +205,7 @@ async fn test_auth_enabled_invalid_token() {
         enabled: true,
         require_auth: true,
         public_health: true,
-        issuer_url: None,
+        issuer_url: Some(mock_server.uri()),
         audience: None,
     };
 
@@ -161,7 +219,7 @@ async fn test_auth_enabled_invalid_token() {
         scope: "openid email profile".to_string(),
     };
 
-    let auth_state = AuthMiddlewareState::new(config, Some(&oidc_config))
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state");
 
@@ -188,7 +246,7 @@ async fn test_auth_required_missing_token() {
         enabled: true,
         require_auth: true,
         public_health: true,
-        issuer_url: None,
+        issuer_url: Some(mock_server.uri()),
         audience: None,
     };
 
@@ -202,7 +260,7 @@ async fn test_auth_required_missing_token() {
         scope: "openid email profile".to_string(),
     };
 
-    let auth_state = AuthMiddlewareState::new(config, Some(&oidc_config))
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state");
 
@@ -225,7 +283,7 @@ async fn test_auth_optional_missing_token() {
         enabled: true,
         require_auth: false, // Auth is optional
         public_health: true,
-        issuer_url: None,
+        issuer_url: Some(mock_server.uri()),
         audience: None,
     };
 
@@ -239,7 +297,7 @@ async fn test_auth_optional_missing_token() {
         scope: "openid email profile".to_string(),
     };
 
-    let auth_state = AuthMiddlewareState::new(config, Some(&oidc_config))
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state");
 
@@ -262,7 +320,7 @@ async fn test_invalid_bearer_format() {
         enabled: true,
         require_auth: true,
         public_health: true,
-        issuer_url: None,
+        issuer_url: Some(mock_server.uri()),
         audience: None,
     };
 
@@ -276,7 +334,7 @@ async fn test_invalid_bearer_format() {
         scope: "openid email profile".to_string(),
     };
 
-    let auth_state = AuthMiddlewareState::new(config, Some(&oidc_config))
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state");
 
@@ -316,7 +374,7 @@ async fn test_user_claims_attached_to_request() {
         enabled: true,
         require_auth: true,
         public_health: true,
-        issuer_url: None,
+        issuer_url: Some(mock_server.uri()),
         audience: None,
     };
 
@@ -330,7 +388,7 @@ async fn test_user_claims_attached_to_request() {
         scope: "openid email profile".to_string(),
     };
 
-    let auth_state = AuthMiddlewareState::new(config, Some(&oidc_config))
+    let auth_state = AuthMiddlewareState::new(config)
         .await
         .expect("Should create auth state");
 
@@ -338,10 +396,11 @@ async fn test_user_claims_attached_to_request() {
         .route("/test", get(protected_handler))
         .layer(from_fn_with_state(auth_state, mcp_auth_middleware));
 
-    // Request with valid token
+    // Request with a REAL minted token — claims must reach the handler
+    let token = serve_jwks_and_mint(&mock_server, "user456", "testuser@example.com").await;
     let request = Request::builder()
         .uri("/test")
-        .header(header::AUTHORIZATION, "Bearer valid_token")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
 

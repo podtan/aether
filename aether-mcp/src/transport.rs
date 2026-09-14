@@ -474,6 +474,16 @@ impl StdioTransport {
                     match serde_json::from_str::<McpRequest>(line) {
                         Ok(request) => {
                             debug!("Parsed request: {:?}", request);
+                            // JSON-RPC 2.0: notifications MUST NOT receive a
+                            // response frame. The rmcp client treats the
+                            // unsolicited id:null reply to
+                            // notifications/initialized as a protocol
+                            // violation and closes the transport (caught by
+                            // the revived integration tests).
+                            if request.is_notification() {
+                                let _ = self.server.handle_request(request).await;
+                                continue;
+                            }
                             // Handle the request
                             let response = self.server.handle_request(request).await;
                             debug!("Generated response: {:?}", response);

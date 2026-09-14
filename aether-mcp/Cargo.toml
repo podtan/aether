@@ -43,4 +43,8 @@ urlencoding = "2.1"
 rmcp = { version = "0.3.0", features = ["client", "reqwest", "transport-sse-client", "transport-child-process"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls-webpki-roots", "stream"], default-features = false }
 wiremock = "0.6"
-tower = { workspace = true }
+tower = { workspace = true }# rev3-style real-JWT auth tests: mint RS256 tokens against the mock IdP JWKS
+rsa = "0.9"
+rand = "0.8"
+jsonwebtoken = "9"
+base64 = "0.22"
