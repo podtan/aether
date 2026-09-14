@@ -1,6 +1,5 @@
 //! Authentication middleware for MCP endpoints
 
-use pep::oidc::resource_server::ResourceServerClient;
 use aether_config::McpAuthConfig;
 use axum::{
     extract::State,
@@ -8,6 +7,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use pep::oidc::resource_server::ResourceServerClient;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -29,11 +29,11 @@ impl AuthMiddlewareState {
     pub async fn new(config: McpAuthConfig) -> anyhow::Result<Self> {
         Self::new_with_base_url(config, None, None).await
     }
-    
+
     pub async fn new_with_base_url(
-        config: McpAuthConfig, 
+        config: McpAuthConfig,
         server_base_url: Option<String>,
-        api_name: Option<String>
+        api_name: Option<String>,
     ) -> anyhow::Result<Self> {
         if !config.enabled {
             return Ok(Self {
@@ -44,7 +44,8 @@ impl AuthMiddlewareState {
             });
         }
 
-        let issuer_url = config.issuer_url
+        let issuer_url = config
+            .issuer_url
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("issuer_url required when mcp_auth.enabled=true"))?;
 
@@ -72,7 +73,7 @@ pub async fn mcp_auth_middleware(
         debug!("MCP auth disabled, allowing request");
         return Ok(next.run(request).await);
     }
-    
+
     // Skip auth for public endpoints (OAuth facade, health, etc.)
     let path = request.uri().path();
     if is_public_endpoint_single(path) {
@@ -101,7 +102,7 @@ pub async fn mcp_auth_middleware(
                     if auth_state.config.require_auth {
                         return Ok(unauthorized_response(
                             auth_state.api_name.as_deref(),
-                            auth_state.server_base_url.as_deref()
+                            auth_state.server_base_url.as_deref(),
                         ));
                     } else {
                         // Auth not required, allow request without token
@@ -116,7 +117,7 @@ pub async fn mcp_auth_middleware(
                 warn!("Missing Authorization header, rejecting request");
                 return Ok(unauthorized_response(
                     auth_state.api_name.as_deref(),
-                    auth_state.server_base_url.as_deref()
+                    auth_state.server_base_url.as_deref(),
                 ));
             } else {
                 // Auth not required, allow request
@@ -135,10 +136,18 @@ pub async fn mcp_auth_middleware(
     };
 
     // Get client_id (audience) from config
-    let client_id = auth_state.config.audience.clone().unwrap_or_else(|| "unknown".to_string());
+    let client_id = auth_state
+        .config
+        .audience
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Validate token using PEP's ResourceServerClient
-    match auth_state.validator.validate_jwt(token, &issuer_url, &client_id).await {
+    match auth_state
+        .validator
+        .validate_jwt(token, &issuer_url, &client_id)
+        .await
+    {
         Ok(claims) => {
             info!(
                 "MCP auth successful: user={} sub={}",
@@ -153,7 +162,10 @@ pub async fn mcp_auth_middleware(
             // regression the revived integration tests caught.
             let user_claims = aether_auth::oidc::UserClaims {
                 sub: claims.sub.clone(),
-                email: claims.email.clone().unwrap_or_else(|| "unknown@example.com".to_string()),
+                email: claims
+                    .email
+                    .clone()
+                    .unwrap_or_else(|| "unknown@example.com".to_string()),
                 name: claims
                     .name
                     .clone()
@@ -172,7 +184,7 @@ pub async fn mcp_auth_middleware(
             warn!("Token validation failed: {}", e);
             Ok(unauthorized_response(
                 auth_state.api_name.as_deref(),
-                auth_state.server_base_url.as_deref()
+                auth_state.server_base_url.as_deref(),
             ))
         }
     }
@@ -180,18 +192,18 @@ pub async fn mcp_auth_middleware(
 
 /// Check if endpoint should be public (no auth required) - single-config mode
 fn is_public_endpoint_single(path: &str) -> bool {
-    path == "/health" ||
-    path.starts_with("/api/") ||
-    path == "/authorize" ||
-    path == "/token" ||
-    path == "/.well-known/oauth-authorization-server" ||
-    path == "/.well-known/oauth-protected-resource"
+    path == "/health"
+        || path.starts_with("/api/")
+        || path == "/authorize"
+        || path == "/token"
+        || path == "/.well-known/oauth-authorization-server"
+        || path == "/.well-known/oauth-protected-resource"
 }
 
 /// Error response with WWW-Authenticate header (RFC 6750 + RFC 9728)
 pub fn unauthorized_response(api_name: Option<&str>, server_base_url: Option<&str>) -> Response {
     let mut response = StatusCode::UNAUTHORIZED.into_response();
-    
+
     // Build WWW-Authenticate header with resource_metadata per RFC 9728
     let www_authenticate = if let (Some(name), Some(base_url)) = (api_name, server_base_url) {
         // Per-API mode: include resource_metadata pointing to PRM endpoint
@@ -218,11 +230,10 @@ pub fn unauthorized_response(api_name: Option<&str>, server_base_url: Option<&st
         // Fallback without resource_metadata (shouldn't happen in normal operation)
         r#"Bearer realm="aether-mcp", error="invalid_token""#.to_string()
     };
-    
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        www_authenticate.parse().unwrap(),
-    );
+
+    response
+        .headers_mut()
+        .insert(header::WWW_AUTHENTICATE, www_authenticate.parse().unwrap());
     response
 }
 
@@ -235,29 +246,32 @@ pub async fn per_api_auth_middleware(
     // Extract API name from path
     let path = request.uri().path();
     let api_name = extract_api_name(path);
-    
+
     // Skip auth for public endpoints
     if is_public_endpoint(path) {
         debug!("Skipping auth for public endpoint: {}", path);
         return Ok(next.run(request).await);
     }
-    
+
     // Get auth config for this API
     let auth_state = if let Some(ref name) = api_name {
         app_state.get_auth_config(name).await
     } else {
         None
     };
-    
+
     // If no auth configured for this API, allow request
     let auth_state = match auth_state {
         Some(state) => state,
         None => {
-            debug!("No auth configured for API {:?}, allowing request", api_name);
+            debug!(
+                "No auth configured for API {:?}, allowing request",
+                api_name
+            );
             return Ok(next.run(request).await);
         }
     };
-    
+
     // Create a new state with API name and base URL for proper RFC 9728 WWW-Authenticate header
     let auth_state_with_url = AuthMiddlewareState {
         config: auth_state.config,
@@ -265,7 +279,7 @@ pub async fn per_api_auth_middleware(
         server_base_url: Some(app_state.get_server_base_url().to_string()),
         api_name: api_name.clone(),
     };
-    
+
     // Use existing auth validation logic
     mcp_auth_middleware(State(auth_state_with_url), request, next).await
 }
@@ -274,31 +288,31 @@ pub async fn per_api_auth_middleware(
 fn extract_api_name(path: &str) -> Option<String> {
     // Path patterns: /{api_name}/sse, /{api_name}/message, etc.
     let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    
+
     // First segment should be the API name (skip empty and special paths)
     if segments.is_empty() {
         return None;
     }
-    
+
     let first = segments[0];
-    
+
     // Skip special paths
     if first.is_empty() || first == "api" || first == "health" || first == "stats" {
         return None;
     }
-    
+
     Some(first.to_string())
 }
 
 /// Check if endpoint should be public (no auth required)
 fn is_public_endpoint(path: &str) -> bool {
-    path.starts_with("/health") ||
-    path.starts_with("/api/") ||
-    path.ends_with("/authorize") ||
-    path.ends_with("/token") ||
-    path.ends_with("/.well-known/oauth-authorization-server") ||
-    path.ends_with("/.well-known/oauth-protected-resource") ||
-    path.ends_with("/.well-known/openid-configuration")
+    path.starts_with("/health")
+        || path.starts_with("/api/")
+        || path.ends_with("/authorize")
+        || path.ends_with("/token")
+        || path.ends_with("/.well-known/oauth-authorization-server")
+        || path.ends_with("/.well-known/oauth-protected-resource")
+        || path.ends_with("/.well-known/openid-configuration")
 }
 
 /// Authentication middleware for dedicated API ports (root-level endpoints)
@@ -310,35 +324,41 @@ pub async fn dedicated_api_auth_middleware(
     // Skip auth for public endpoints (root-level OAuth, health, etc.)
     let path = request.uri().path();
     if is_public_endpoint_dedicated(path) {
-        debug!("Skipping auth for public endpoint on dedicated port: {}", path);
+        debug!(
+            "Skipping auth for public endpoint on dedicated port: {}",
+            path
+        );
         return Ok(next.run(request).await);
     }
-    
+
     // Get auth config for this API
     let auth_state = match &state.auth_config {
         Some(auth_state) => auth_state,
         None => {
-            debug!("No auth configured for API {}, allowing request", state.api_name);
+            debug!(
+                "No auth configured for API {}, allowing request",
+                state.api_name
+            );
             return Ok(next.run(request).await);
         }
     };
-    
+
     // Create modified auth state with dedicated port URL for WWW-Authenticate header
     let dedicated_auth_state = crate::middleware::AuthMiddlewareState {
         config: auth_state.config.clone(),
         validator: auth_state.validator.clone(),
         server_base_url: Some(state.dedicated_port_url.clone()),
-        api_name: None,  // No API name in URL path for dedicated port (root-level)
+        api_name: None, // No API name in URL path for dedicated port (root-level)
     };
-    
+
     // Use existing auth validation logic with dedicated port URL
     mcp_auth_middleware(State(dedicated_auth_state), request, next).await
 }
 
 /// Check if endpoint should be public (no auth required) on dedicated port
 fn is_public_endpoint_dedicated(path: &str) -> bool {
-    path == "/health" ||
-    path == "/authorize" ||
-    path == "/token" ||
-    path.starts_with("/.well-known/")
+    path == "/health"
+        || path == "/authorize"
+        || path == "/token"
+        || path.starts_with("/.well-known/")
 }

@@ -76,7 +76,6 @@ async fn test_auth_disabled_allows_all_requests() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
-
 /// Mount a real JWKS endpoint on the mock IdP and mint a REAL RS256 token
 /// for it — the middleware validates signatures via discovery since the
 /// PEP port; a static "valid_token" string cannot survive real validation.

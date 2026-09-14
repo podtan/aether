@@ -136,10 +136,7 @@ impl ConfigDirectoryManager {
         })?;
 
         let mut config: AetherConfig = serde_yaml::from_str(&config_content).map_err(|e| {
-            AetherError::Configuration(format!(
-                "Failed to parse config for '{}': {}",
-                api_name, e
-            ))
+            AetherError::Configuration(format!("Failed to parse config for '{}': {}", api_name, e))
         })?;
 
         // Generation api_name: prefer the apis key from the hand-curated

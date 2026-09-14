@@ -14,7 +14,7 @@ use tokio::process::Command;
 
 /// Test configuration path  
 // Absolute paths: cargo test runs with the PACKAGE dir as CWD, and the
-    // example configs + the built binary live at the workspace root.
+// example configs + the built binary live at the workspace root.
 const TEST_CONFIG_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../examples/configs/jsonplaceholder/config.yaml"
@@ -128,11 +128,11 @@ async fn test_rmcp_sse_client_connection() -> Result<()> {
 async fn test_server_initialization_with_rmcp() -> Result<()> {
     // Create a client that connects to our aether server via stdio
     let client = ()
-        .serve(TokioChildProcess::new(
-            Command::new(AETHER_BIN).configure(|cmd| {
+        .serve(TokioChildProcess::new(Command::new(AETHER_BIN).configure(
+            |cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
-            }),
-        )?)
+            },
+        ))?)
         .await?;
 
     // Get server info to verify connection
@@ -150,11 +150,11 @@ async fn test_server_initialization_with_rmcp() -> Result<()> {
 #[tokio::test]
 async fn test_tools_list_with_rmcp() -> Result<()> {
     let client = ()
-        .serve(TokioChildProcess::new(
-            Command::new(AETHER_BIN).configure(|cmd| {
+        .serve(TokioChildProcess::new(Command::new(AETHER_BIN).configure(
+            |cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
-            }),
-        )?)
+            },
+        ))?)
         .await?;
 
     // List all available tools
@@ -195,11 +195,11 @@ async fn test_tools_list_with_rmcp() -> Result<()> {
 #[tokio::test]
 async fn test_tool_call_get_users_with_rmcp() -> Result<()> {
     let client = ()
-        .serve(TokioChildProcess::new(
-            Command::new(AETHER_BIN).configure(|cmd| {
+        .serve(TokioChildProcess::new(Command::new(AETHER_BIN).configure(
+            |cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
-            }),
-        )?)
+            },
+        ))?)
         .await?;
 
     // Call the getUsers tool
@@ -224,11 +224,11 @@ async fn test_tool_call_get_users_with_rmcp() -> Result<()> {
 #[tokio::test]
 async fn test_tool_call_get_posts_with_params() -> Result<()> {
     let client = ()
-        .serve(TokioChildProcess::new(
-            Command::new(AETHER_BIN).configure(|cmd| {
+        .serve(TokioChildProcess::new(Command::new(AETHER_BIN).configure(
+            |cmd| {
                 cmd.arg("--config").arg(TEST_CONFIG_PATH).arg("--stdio");
-            }),
-        )?)
+            },
+        ))?)
         .await?;
 
     // Call the getPosts tool with userId parameter

@@ -262,11 +262,7 @@ fn find_refs(value: &serde_json::Value) -> Vec<String> {
     refs
 }
 
-fn get_tool_param<'a>(
-    config: &'a AetherConfig,
-    tool: &str,
-    param: &str,
-) -> &'a serde_json::Value {
+fn get_tool_param<'a>(config: &'a AetherConfig, tool: &str, param: &str) -> &'a serde_json::Value {
     &config
         .enhanced_tools
         .get(tool)
@@ -280,13 +276,10 @@ fn get_tool_param<'a>(
 
 #[tokio::test]
 async fn items_nested_ref_is_inlined() {
-    let config = generate_config_from_openapi(
-        &spec_with_items_ref(),
-        "test",
-        "http://localhost:9999",
-    )
-    .await
-    .expect("generation must succeed");
+    let config =
+        generate_config_from_openapi(&spec_with_items_ref(), "test", "http://localhost:9999")
+            .await
+            .expect("generation must succeed");
 
     let tags = get_tool_param(&config, "test_createThing", "tags");
     assert_eq!(tags.get("type").and_then(|t| t.as_str()), Some("array"));
@@ -314,13 +307,10 @@ async fn items_nested_ref_is_inlined() {
 
 #[tokio::test]
 async fn all_schema_keywords_resolve_refs() {
-    let config = generate_config_from_openapi(
-        &spec_with_all_keywords(),
-        "test",
-        "http://localhost:9999",
-    )
-    .await
-    .expect("generation must succeed");
+    let config =
+        generate_config_from_openapi(&spec_with_all_keywords(), "test", "http://localhost:9999")
+            .await
+            .expect("generation must succeed");
 
     let everything = get_tool_param(&config, "test_createThing", "title").get("type");
     assert_eq!(everything.and_then(|t| t.as_str()), Some("string"));
@@ -367,12 +357,9 @@ async fn all_schema_keywords_resolve_refs() {
 #[tokio::test]
 async fn self_referencing_schema_does_not_infinite_loop() {
     // Must terminate (depth guard) instead of blowing the stack.
-    let result = generate_config_from_openapi(
-        &spec_with_recursive_ref(),
-        "test",
-        "http://localhost:9999",
-    )
-    .await;
+    let result =
+        generate_config_from_openapi(&spec_with_recursive_ref(), "test", "http://localhost:9999")
+            .await;
 
     match result {
         Ok(config) => {
@@ -402,13 +389,10 @@ async fn self_referencing_schema_does_not_infinite_loop() {
 
 #[tokio::test]
 async fn query_parameter_ref_is_inlined() {
-    let config = generate_config_from_openapi(
-        &spec_with_param_ref(),
-        "test",
-        "http://localhost:9999",
-    )
-    .await
-    .expect("generation must succeed");
+    let config =
+        generate_config_from_openapi(&spec_with_param_ref(), "test", "http://localhost:9999")
+            .await
+            .expect("generation must succeed");
 
     let filter = get_tool_param(&config, "test_getThing", "filter");
     let items = filter.get("items").expect("items must survive");
@@ -460,17 +444,14 @@ async fn unresolvable_external_ref_fails_generation_loudly() {
     })
     .to_string();
 
-    let result = generate_config_from_openapi(
-        &spec,
-        "test",
-        "http://localhost:9999",
-    )
-    .await;
+    let result = generate_config_from_openapi(&spec, "test", "http://localhost:9999").await;
 
     assert!(
         result.is_err(),
         "generation with unresolvable external $ref must fail, got: {:?}",
-        result.as_ref().map(|c| c.enhanced_tools.keys().collect::<Vec<_>>())
+        result
+            .as_ref()
+            .map(|c| c.enhanced_tools.keys().collect::<Vec<_>>())
     );
     let msg = format!("{}", result.unwrap_err());
     assert!(
@@ -510,7 +491,9 @@ async fn real_pdt_spec_generates_clean_config() {
     // The historical tripwire must now be an inlined object schema.
     let tags = get_tool_param(&config, "pdt_createAsset", "tags");
     assert_eq!(
-        tags.get("items").and_then(|i| i.get("type")).and_then(|t| t.as_str()),
+        tags.get("items")
+            .and_then(|i| i.get("type"))
+            .and_then(|t| t.as_str()),
         Some("object"),
         "pdt_createAsset.tags.items must be the inlined AddTagRequest"
     );

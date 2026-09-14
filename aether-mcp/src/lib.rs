@@ -30,7 +30,9 @@ pub mod server;
 pub mod transport;
 
 // Re-export core structures
-pub use middleware::{mcp_auth_middleware, per_api_auth_middleware, AuthMiddlewareState, ForwardedAuth};
+pub use middleware::{
+    mcp_auth_middleware, per_api_auth_middleware, AuthMiddlewareState, ForwardedAuth,
+};
 pub use multi_server::MultiConfigServer;
 pub use transport::{HttpSseTransport, MultiConfigTransport, StdioTransport};
 
@@ -166,7 +168,14 @@ impl McpServer {
                 Ok(result) => McpResponse::success(request.id, result),
                 Err(error) => McpResponse::error(request.id, McpError::from_aether_error(&error)),
             },
-            "tools/call" => match self.handle_call_tool(request.params, request.forwarded_authorization, request.instance_id).await {
+            "tools/call" => match self
+                .handle_call_tool(
+                    request.params,
+                    request.forwarded_authorization,
+                    request.instance_id,
+                )
+                .await
+            {
                 Ok(result) => McpResponse::success(request.id, result),
                 Err(error) => McpResponse::error(request.id, McpError::from_aether_error(&error)),
             },
@@ -193,12 +202,15 @@ impl McpServer {
     pub async fn list_tools(&self) -> Result<Vec<Tool>, AetherError> {
         let config = self.config.read().await;
         let pinned_count = config.pinned_tools.len();
-        
-        info!("📋 list_tools called - pinned_tools count: {}", pinned_count);
+
+        info!(
+            "📋 list_tools called - pinned_tools count: {}",
+            pinned_count
+        );
         if pinned_count > 0 {
             info!("📋 Pinned tools: {:?}", config.pinned_tools);
         }
-        
+
         if config.pinned_tools.is_empty() {
             info!("📋 Using full mode (all tools)");
             drop(config);
@@ -278,10 +290,15 @@ impl McpServer {
     }
 
     /// List compact tools (pinned + search tools)
-    async fn list_compact_tools(&self, pinned_tools: &[String], apis: &[String]) -> Result<Vec<Tool>, AetherError> {
+    async fn list_compact_tools(
+        &self,
+        pinned_tools: &[String],
+        apis: &[String],
+    ) -> Result<Vec<Tool>, AetherError> {
         let mut tool_list = Vec::new();
         let all_tools = self.list_all_tools_for_compact().await?;
-        let tools_map: HashMap<String, Tool> = all_tools.into_iter().map(|t| (t.name.clone(), t)).collect();
+        let tools_map: HashMap<String, Tool> =
+            all_tools.into_iter().map(|t| (t.name.clone(), t)).collect();
 
         for pinned_name in pinned_tools {
             if let Some(tool) = tools_map.get(pinned_name) {
@@ -442,9 +459,12 @@ impl McpServer {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AetherError::Mcp("query parameter required".to_string()))?;
 
-            info!("🔍 Searching tools for API '{}' with query: {}", api_name, query);
+            info!(
+                "🔍 Searching tools for API '{}' with query: {}",
+                api_name, query
+            );
             let tools = self.search_tools_by_api(api_name, query).await?;
-            
+
             return Ok(Some(ToolResponse {
                 content: serde_json::to_value(tools)
                     .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize tools"})),
@@ -455,7 +475,7 @@ impl McpServer {
         if let Some(api_name) = tool_name.strip_suffix("_list_tools") {
             info!("📋 Listing all tools for API: {}", api_name);
             let tools = self.list_tools_by_api(api_name).await?;
-            
+
             return Ok(Some(ToolResponse {
                 content: serde_json::to_value(tools)
                     .unwrap_or_else(|_| serde_json::json!({"error": "Failed to serialize tools"})),
@@ -467,9 +487,13 @@ impl McpServer {
     }
 
     /// Search tools by API with fuzzy matching
-    async fn search_tools_by_api(&self, api_name: &str, query: &str) -> Result<Vec<Tool>, AetherError> {
+    async fn search_tools_by_api(
+        &self,
+        api_name: &str,
+        query: &str,
+    ) -> Result<Vec<Tool>, AetherError> {
         let all_tools = self.list_all_tools_for_compact().await?;
-        
+
         Ok(all_tools
             .into_iter()
             .filter(|t| t.name.starts_with(&format!("{}_", api_name)))
@@ -480,7 +504,7 @@ impl McpServer {
     /// List all tools for a specific API
     async fn list_tools_by_api(&self, api_name: &str) -> Result<Vec<Tool>, AetherError> {
         let all_tools = self.list_all_tools_for_compact().await?;
-        
+
         Ok(all_tools
             .into_iter()
             .filter(|t| t.name.starts_with(&format!("{}_", api_name)))
@@ -499,7 +523,8 @@ impl McpServer {
             }
         }
 
-        let full_query_score = jaro_winkler(&query_lower, &name_lower).max(jaro_winkler(&query_lower, &desc_lower));
+        let full_query_score =
+            jaro_winkler(&query_lower, &name_lower).max(jaro_winkler(&query_lower, &desc_lower));
         if full_query_score > 0.6 {
             return true;
         }
@@ -591,14 +616,19 @@ impl McpServer {
                         // Passthrough: use the forwarded token from the MCP request
                         if let Some(ref fwd) = authorization {
                             if let Some(token) = fwd.credentials.get("token") {
-                                debug!("✅ Passthrough auth — using forwarded token for {}",
-                                    enhanced_tool.api_name);
+                                debug!(
+                                    "✅ Passthrough auth — using forwarded token for {}",
+                                    enhanced_tool.api_name
+                                );
                                 let mut creds = HashMap::new();
                                 creds.insert("token".to_string(), token.clone());
-                                (Some(auth_spec), Some(Authorization {
-                                    auth_type: "bearer".to_string(),
-                                    credentials: creds,
-                                }))
+                                (
+                                    Some(auth_spec),
+                                    Some(Authorization {
+                                        auth_type: "bearer".to_string(),
+                                        credentials: creds,
+                                    }),
+                                )
                             } else {
                                 return Err(AetherError::Authentication(
                                     "Passthrough auth requires a token".to_string(),
@@ -686,14 +716,19 @@ impl McpServer {
                         // Passthrough: use the forwarded token from the MCP request
                         if let Some(ref fwd) = authorization {
                             if let Some(token) = fwd.credentials.get("token") {
-                                debug!("✅ Passthrough auth — using forwarded token for {}",
-                                    tool_def.api_name);
+                                debug!(
+                                    "✅ Passthrough auth — using forwarded token for {}",
+                                    tool_def.api_name
+                                );
                                 let mut creds = HashMap::new();
                                 creds.insert("token".to_string(), token.clone());
-                                (Some(auth_spec), Some(Authorization {
-                                    auth_type: "bearer".to_string(),
-                                    credentials: creds,
-                                }))
+                                (
+                                    Some(auth_spec),
+                                    Some(Authorization {
+                                        auth_type: "bearer".to_string(),
+                                        credentials: creds,
+                                    }),
+                                )
                             } else {
                                 return Err(AetherError::Authentication(
                                     "Passthrough auth requires a token".to_string(),
@@ -965,7 +1000,10 @@ impl McpServer {
         let effective_auth = params.authorization.or_else(|| {
             forwarded_authorization.map(|auth_header| {
                 // Parse "Bearer <token>" from the forwarded header
-                let token = auth_header.strip_prefix("Bearer ").unwrap_or(&auth_header).to_string();
+                let token = auth_header
+                    .strip_prefix("Bearer ")
+                    .unwrap_or(&auth_header)
+                    .to_string();
                 let mut creds = HashMap::new();
                 creds.insert("token".to_string(), token);
                 Authorization {
@@ -977,7 +1015,12 @@ impl McpServer {
 
         let arguments = params.arguments.unwrap_or_default();
         let response = self
-            .call_tool(&params.name, arguments, effective_auth, request_instance_id.as_deref())
+            .call_tool(
+                &params.name,
+                arguments,
+                effective_auth,
+                request_instance_id.as_deref(),
+            )
             .await?;
 
         Ok(tool_response_to_mcp(response))

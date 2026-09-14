@@ -438,7 +438,7 @@ impl AetherConfig {
     pub fn has_web_authentication(&self) -> bool {
         self.oidc.is_some() || self.session.is_some() || self.dev.is_some()
     }
-    
+
     /// Get dedicated port if configured (for per-API dedicated listener)
     /// Returns None if server block is absent or port is not specified
     pub fn dedicated_port(&self) -> Option<u16> {

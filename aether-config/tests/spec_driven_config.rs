@@ -87,7 +87,9 @@ apis:
 
 async fn write_layout(dir: &std::path::Path, spec_name: &str, config_yaml: &str) {
     tokio::fs::create_dir_all(dir).await.unwrap();
-    tokio::fs::write(dir.join(spec_name), openapi_spec()).await.unwrap();
+    tokio::fs::write(dir.join(spec_name), openapi_spec())
+        .await
+        .unwrap();
     tokio::fs::write(dir.join("config.yaml"), config_yaml)
         .await
         .unwrap();
@@ -300,10 +302,15 @@ apis:
     tokio::fs::write(api_dir.join("nghr-openapi.json"), spec.to_string())
         .await
         .unwrap();
-    tokio::fs::write(api_dir.join("config.yaml"), yaml).await.unwrap();
+    tokio::fs::write(api_dir.join("config.yaml"), yaml)
+        .await
+        .unwrap();
 
     let manager = ConfigDirectoryManager::new(tmp.join("apis"));
-    let (config, _) = manager.load_api_config("nghr_auth").await.expect("must load");
+    let (config, _) = manager
+        .load_api_config("nghr_auth")
+        .await
+        .expect("must load");
 
     // Tool prefix must be "nghr_ping", NOT "nghr_auth_ping"
     assert!(
@@ -357,13 +364,7 @@ async fn real_configs_load_with_derived_tools() {
         for (name, tool) in &config.enhanced_tools {
             for param in &tool.parameters {
                 let s = serde_json::to_string(&param.schema).unwrap();
-                assert!(
-                    !s.contains("$ref"),
-                    "{}.{} leaked a $ref: {}",
-                    api,
-                    name,
-                    s
-                );
+                assert!(!s.contains("$ref"), "{}.{} leaked a $ref: {}", api, name, s);
             }
         }
     }

@@ -19,21 +19,21 @@ pub struct AuthSpec {
     pub required: bool,
 }
 
-    /// Types of authentication supported
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum AuthType {
-        Bearer,
-        ApiKey {
-            location: ApiKeyLocation,
-            name: String,
-        },
-        Basic,
-        Custom {
-            headers: HashMap<String, String>,
-        },
-        /// Passthrough authentication — forwards the client's Authorization header to the backend.
-        Passthrough,
+/// Types of authentication supported
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthType {
+    Bearer,
+    ApiKey {
+        location: ApiKeyLocation,
+        name: String,
+    },
+    Basic,
+    Custom {
+        headers: HashMap<String, String>,
+    },
+    /// Passthrough authentication — forwards the client's Authorization header to the backend.
+    Passthrough,
 }
 
 /// Location for API key authentication
