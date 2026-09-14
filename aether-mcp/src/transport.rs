@@ -843,7 +843,7 @@ impl MultiConfigTransport {
     }
 }
 /// OAuth facade for VSCode MCP client compatibility
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OAuthFacade {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
@@ -851,19 +851,71 @@ pub struct OAuthFacade {
 }
 
 impl OAuthFacade {
+    /// Build the facade from an OIDC config by fetching the issuer's
+    /// `/.well-known/openid-configuration` document.
+    ///
+    /// Every failure mode is an `Err` — never a panic. A misconfigured
+    /// issuer (wrong well-known path, non-OIDC service, proxy error body)
+    /// returns a JSON document without the expected fields; the caller
+    /// (transport startup) logs a warning and skips the facade, leaving the
+    /// API serving without OAuth. See issue 2bf2be1a: the previous
+    /// implementation `.unwrap()`ed the discovery fields and took the whole
+    /// process down on a config typo.
     pub async fn from_oidc_config(oidc_config: &aether_config::OidcConfig) -> anyhow::Result<Self> {
         let discovery_url = format!(
             "{}/.well-known/openid-configuration",
             oidc_config.issuer_url.trim_end_matches('/')
         );
-        
-        let client = reqwest::Client::new();
-        let response = client.get(&discovery_url).send().await?;
-        let discovery: serde_json::Value = response.json().await?;
-        
+
+        // Timeout so an unreachable/blackholed issuer fails fast instead of
+        // hanging boot (issue 2bf2be1a, secondary defect).
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build OIDC discovery client: {}", e))?;
+
+        let response = client
+            .get(&discovery_url)
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "OIDC discovery request to {} failed: {} (configured issuer_url={})",
+                    discovery_url,
+                    e,
+                    oidc_config.issuer_url
+                )
+            })?;
+        let discovery: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "OIDC discovery at {} returned a non-JSON body: {} (configured issuer_url={} — is this an OIDC provider?)",
+                    discovery_url,
+                    e,
+                    oidc_config.issuer_url
+                )
+            })?;
+
+        let pick = |field: &str| -> Result<String, anyhow::Error> {
+            discovery
+                .get(field)
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "OIDC discovery at {} is missing '{}' (configured issuer_url={}) — the issuer did not return a valid openid-configuration document",
+                        discovery_url,
+                        field,
+                        oidc_config.issuer_url
+                    )
+                })
+        };
+
         Ok(Self {
-            authorization_endpoint: discovery["authorization_endpoint"].as_str().unwrap().to_string(),
-            token_endpoint: discovery["token_endpoint"].as_str().unwrap().to_string(),
+            authorization_endpoint: pick("authorization_endpoint")?,
+            token_endpoint: pick("token_endpoint")?,
             issuer_url: oidc_config.issuer_url.clone(),
         })
     }
