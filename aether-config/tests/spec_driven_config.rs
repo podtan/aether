@@ -369,3 +369,77 @@ async fn real_configs_load_with_derived_tools() {
         }
     }
 }
+
+#[tokio::test]
+async fn org_chart_tools_derive_with_handler_contract() {
+    // de5fe26c regression (2026-10-20): the org-chart MCP tools must derive
+    // from the nghr spec with schemas matching the handlers BOTH ways —
+    // spec→tool (the four tools exist with the right params) and
+    // tool→handler (the loud-failure contract travels in the spec: 404 on
+    // subtree, 404+422 on set-manager — never silent-empty).
+    //
+    // The fixture is the SERVED nghr v0.3.9 spec (handler-generated via
+    // utoipa, exported from a live v0.3.9 server) — tracked in-repo because
+    // configs/ is gitignored (deploy-local, prod re-pulls at deploy time).
+    // When nghr's contract moves, the fixture update rides the nghr release
+    // that moves it; drift fails here, loud.
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/nghr-openapi-v0.3.9.json");
+    let openapi = std::fs::read_to_string(&fixture).expect("nghr spec fixture must exist");
+
+    let config = aether_config::generator::generate_config_from_openapi(
+        &openapi,
+        "nghr",
+        "http://localhost:8081",
+    )
+    .await
+    .expect("org tools must derive from the served nghr v0.3.9 spec");
+
+    // spec→tool: all four org tools derive from the served spec.
+    for expected in [
+        "nghr_org_chart",
+        "nghr_org_chart_subtree",
+        "nghr_set_employee_manager",
+        "nghr_clear_employee_manager",
+    ] {
+        assert!(
+            config.enhanced_tools.contains_key(expected),
+            "org tool {expected} must derive from the served nghr spec; have: {:?}",
+            config.enhanced_tools.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // tool→handler shapes: subtree roots at the employee_id PATH param;
+    // set-manager exposes the manager_id body field.
+    let subtree = &config.enhanced_tools["nghr_org_chart_subtree"];
+    assert!(
+        subtree.parameters.iter().any(|p| p.name == "employee_id"),
+        "subtree tool must expose the employee_id path param"
+    );
+    let set_mgr = &config.enhanced_tools["nghr_set_employee_manager"];
+    assert!(
+        set_mgr.parameters.iter().any(|p| p.name == "manager_id"),
+        "set-manager tool must expose the manager_id body field"
+    );
+
+    // Negative controls: the loud-failure contract travels in the spec.
+    let spec: serde_json::Value = serde_json::from_str(&openapi).expect("fixture parses");
+    let subtree_responses = spec["paths"]["/api/v1/org/chart/{employee_id}"]["get"]["responses"]
+        .as_object()
+        .expect("subtree responses object");
+    assert!(
+        subtree_responses.contains_key("404"),
+        "subtree spec must carry the loud 404 (unknown id is never silent-empty)"
+    );
+    let set_responses = spec["paths"]["/api/v1/employees/{id}/manager"]["put"]["responses"]
+        .as_object()
+        .expect("set-manager responses object");
+    assert!(
+        set_responses.contains_key("422"),
+        "set-manager spec must carry the loud 422 (self-edge / unknown manager)"
+    );
+    assert!(
+        set_responses.contains_key("404"),
+        "set-manager spec must carry the loud 404 (unknown employee)"
+    );
+}
