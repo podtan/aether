@@ -241,12 +241,23 @@ impl ApiClient {
     ) -> Result<reqwest::RequestBuilder> {
         match param.param_type.as_str() {
             "query" => match value {
-                Value::Array(arr) => {
-                    for v in arr {
-                        let v_str = self.value_to_string(v);
-                        request = request.query(&[(param.name.as_str(), v_str)]);
-                    }
-                    Ok(request)
+                Value::Array(_) => {
+                    // JSON-stringified array as ONE param (issue 12d3cb6a):
+                    // serde_urlencoded backends (axum 0.8 Query) have no
+                    // sequence support — repeated params collapse to the
+                    // first occurrence and silently drop the rest ("invalid
+                    // type: string, expected a sequence" on single-element
+                    // arrays). The JSON form round-trips losslessly — the
+                    // backend's tags deserializer parses it, and commas
+                    // inside values survive. Measured live on pdt v0.3.17:
+                    // single AND repeated params both 400.
+                    let value_str = serde_json::to_string(value).map_err(|e| {
+                        AetherError::Api(format!(
+                            "Cannot serialize array parameter '{}': {}",
+                            param.name, e
+                        ))
+                    })?;
+                    Ok(request.query(&[(param.name.as_str(), value_str)]))
                 }
                 _ => {
                     let value_str = self.value_to_string(value);
@@ -439,5 +450,56 @@ impl ApiClient {
             content: Value::Object(response_data),
             is_error,
         })
+    }
+}
+
+#[cfg(test)]
+mod query_array_tests {
+    use super::*;
+
+    /// Issue 12d3cb6a: an array query param must travel as ONE JSON-stringified
+    /// param — serde_urlencoded backends (axum 0.8 Query) have no sequence
+    /// support, so repeated params collapse to the first occurrence and
+    /// silently drop the rest.
+    #[tokio::test]
+    async fn array_query_param_serializes_as_one_json_param() {
+        let client = ApiClient::new("http://127.0.0.1:1".to_string(), None).expect("client");
+        let param = aether_config::openapi::Parameter {
+            name: "tags".to_string(),
+            param_type: "query".to_string(),
+            required: false,
+            schema: serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        };
+        let value = serde_json::json!(["type:doc", "scope:x"]);
+        let request = client
+            .apply_parameter(client.client.get("http://127.0.0.1:1/x"), &param, &value)
+            .expect("apply parameter");
+        let built = request.build().expect("build request");
+        let query = built.url().query().expect("query string present");
+        assert_eq!(
+            query, "tags=%5B%22type%3Adoc%22%2C%22scope%3Ax%22%5D",
+            "array must serialize as ONE JSON param, got: {query}"
+        );
+    }
+
+    #[test]
+    fn scalar_query_param_serializes_plain() {
+        let client = ApiClient::new("http://127.0.0.1:1".to_string(), None).expect("client");
+        let param = aether_config::openapi::Parameter {
+            name: "q".to_string(),
+            param_type: "query".to_string(),
+            required: false,
+            schema: serde_json::json!({"type": "string"}),
+        };
+        let value = serde_json::json!("ledger");
+        let request = client
+            .apply_parameter(client.client.get("http://127.0.0.1:1/x"), &param, &value)
+            .expect("apply parameter");
+        let built = request.build().expect("build request");
+        let query = built.url().query().expect("query string present");
+        assert_eq!(
+            query, "q=ledger",
+            "scalar must serialize plain, got: {query}"
+        );
     }
 }
