@@ -150,7 +150,7 @@ impl ConfigDirectoryManager {
             .next()
             .cloned()
             .unwrap_or_else(|| api_name.to_string());
-        if &gen_api_name != api_name {
+        if gen_api_name != api_name {
             info!(
                 "API '{}': generating tools with api_name '{}' (from apis key, dir name differs)",
                 api_name, gen_api_name

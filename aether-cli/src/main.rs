@@ -104,7 +104,7 @@ async fn generate_config(
 
     // Send request to the config generation API
     let response = client
-        .post(&format!("{}/api/generate-config", server_url))
+        .post(format!("{}/api/generate-config", server_url))
         .json(&payload)
         .send()
         .await?;

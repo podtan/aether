@@ -9,13 +9,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use openid;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 use tracing::{error, info};
-use uuid;
 
 use aether_config::AetherConfig;
 
@@ -25,7 +23,9 @@ use aether_config::generator;
 /// Base path for standalone mode (empty string)
 const STANDALONE_BASE_PATH: &str = "";
 
-/// Base path for combined mode (when mounted under /web)  
+/// Base path for combined mode (when mounted under /web)
+// Kept: documents the combined-mode contract; no current route mounts under /web.
+#[allow(dead_code)]
 const COMBINED_BASE_PATH: &str = "/web";
 
 mod auth;
@@ -127,6 +127,12 @@ impl WebState {
             configs: Arc::new(RwLock::new(HashMap::new())),
             runtime_apis_callback: Some(Arc::new(boxed_callback)),
         }
+    }
+}
+
+impl Default for WebState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -440,6 +446,9 @@ async fn home_page(session: Session) -> HomeTemplate {
 }
 
 /// Handle OpenAPI file upload
+// Kept: standalone-upload variant superseded by handle_upload_openapi_with_client
+// (the wired route); retained for the standalone path's feature parity.
+#[allow(dead_code)]
 async fn handle_upload_openapi(
     State(app_state): State<AppState>,
     session: Session,
@@ -561,36 +570,33 @@ async fn handle_list_apis(
 
     // If we have a runtime APIs callback, also include APIs from there
     if let Some(callback) = &app_state.web.runtime_apis_callback {
-        match callback().await {
-            runtime_apis => {
-                let runtime_apis_count = runtime_apis.len();
-                info!("Found {} runtime APIs from callback", runtime_apis_count);
+        let runtime_apis = callback().await;
+        let runtime_apis_count = runtime_apis.len();
+        info!("Found {} runtime APIs from callback", runtime_apis_count);
 
-                // Add runtime APIs that aren't already in the web configs
-                for api_name in runtime_apis {
-                    if !web_configs.contains_key(&api_name) {
-                        // For runtime APIs, we create a minimal ConfigInfo
-                        // In a real scenario, we might want to load the actual config details
-                        let config_info = ConfigInfo {
-                            api_name: api_name.clone(),
-                            openapi_content: "".to_string(), // Could be loaded from multi-server if needed
-                            config_content: "".to_string(), // Could be loaded from multi-server if needed
-                            base_url: "".to_string(), // Could be extracted from config if needed
-                            created_at: chrono::Utc::now(), // We don't have the actual creation time
-                            updated_at: chrono::Utc::now(),
-                        };
-                        configs_vec.push(config_info);
-                    }
-                }
-
-                info!(
-                    "Total APIs to display: {} (web: {}, runtime: {})",
-                    configs_vec.len(),
-                    web_configs.len(),
-                    runtime_apis_count
-                );
+        // Add runtime APIs that aren't already in the web configs
+        for api_name in runtime_apis {
+            if !web_configs.contains_key(&api_name) {
+                // For runtime APIs, we create a minimal ConfigInfo
+                // In a real scenario, we might want to load the actual config details
+                let config_info = ConfigInfo {
+                    api_name: api_name.clone(),
+                    openapi_content: "".to_string(), // Could be loaded from multi-server if needed
+                    config_content: "".to_string(),  // Could be loaded from multi-server if needed
+                    base_url: "".to_string(),        // Could be extracted from config if needed
+                    created_at: chrono::Utc::now(),  // We don't have the actual creation time
+                    updated_at: chrono::Utc::now(),
+                };
+                configs_vec.push(config_info);
             }
         }
+
+        info!(
+            "Total APIs to display: {} (web: {}, runtime: {})",
+            configs_vec.len(),
+            web_configs.len(),
+            runtime_apis_count
+        );
     }
 
     ApiListTemplate::new_standalone(configs_vec, user)
@@ -610,23 +616,20 @@ pub async fn render_apis(web_state: &WebState, user: Option<&UserInfo>) -> ApiLi
 
     // If we have a runtime APIs callback, also include APIs from there
     if let Some(callback) = &web_state.runtime_apis_callback {
-        match callback().await {
-            runtime_apis => {
-                // Add runtime APIs that aren't already in the web configs
-                for api_name in runtime_apis {
-                    if !web_configs.contains_key(&api_name) {
-                        // For runtime APIs, we create a minimal ConfigInfo
-                        let config_info = ConfigInfo {
-                            api_name: api_name.clone(),
-                            openapi_content: "".to_string(),
-                            config_content: "".to_string(),
-                            base_url: "".to_string(),
-                            created_at: chrono::Utc::now(),
-                            updated_at: chrono::Utc::now(),
-                        };
-                        configs_vec.push(config_info);
-                    }
-                }
+        let runtime_apis = callback().await;
+        // Add runtime APIs that aren't already in the web configs
+        for api_name in runtime_apis {
+            if !web_configs.contains_key(&api_name) {
+                // For runtime APIs, we create a minimal ConfigInfo
+                let config_info = ConfigInfo {
+                    api_name: api_name.clone(),
+                    openapi_content: "".to_string(),
+                    config_content: "".to_string(),
+                    base_url: "".to_string(),
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                };
+                configs_vec.push(config_info);
             }
         }
     }
@@ -930,6 +933,9 @@ async fn home_page_with_client(session: Session) -> HomeTemplate {
 }
 
 /// Auth middleware for client-based app
+// Response-as-Error is the axum middleware idiom — the large-Err lint is a
+// design tradeoff here, not a defect.
+#[allow(clippy::result_large_err)]
 async fn auth_middleware_with_client(
     session: Session,
     request: axum::extract::Request,
@@ -1090,7 +1096,7 @@ async fn oidc_login_with_client(
             "Redirecting to OIDC authorization URL with PKCE: {}",
             url_with_pkce
         );
-        Redirect::to(&url_with_pkce.to_string())
+        Redirect::to(url_with_pkce.as_ref())
     } else {
         // OIDC client not available, redirect with error
         Redirect::to("/login?error=oidc_not_configured")

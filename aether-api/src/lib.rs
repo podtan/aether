@@ -235,7 +235,7 @@ impl ApiClient {
     /// Apply a parameter to the request
     fn apply_parameter(
         &self,
-        mut request: reqwest::RequestBuilder,
+        request: reqwest::RequestBuilder,
         param: &Parameter,
         value: &Value,
     ) -> Result<reqwest::RequestBuilder> {

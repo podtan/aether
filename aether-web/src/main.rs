@@ -4,7 +4,6 @@
 //! via a web interface with OIDC authentication.
 
 use aether_config::AetherConfig;
-use aether_web;
 use axum::Router;
 use clap::{Arg, Command};
 use std::net::SocketAddr;
@@ -60,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize logging
     let log_level = matches.get_one::<String>("log-level").unwrap();
-    let log_filter = match log_level.as_str() {
+    let _log_filter = match log_level.as_str() {
         "trace" => tracing::Level::TRACE,
         "debug" => tracing::Level::DEBUG,
         "info" => tracing::Level::INFO,

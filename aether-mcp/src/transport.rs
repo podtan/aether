@@ -67,25 +67,21 @@ impl HttpSseTransport {
     pub async fn start(
         self,
         auth_config: Option<aether_config::McpAuthConfig>,
-        oidc_config: Option<&aether_config::OidcConfig>,
+        _oidc_config: Option<&aether_config::OidcConfig>,
         prm_config: Option<&aether_config::PrmConfig>,
     ) -> anyhow::Result<()> {
         // Convert PRM config to PEP format
-        let pep_prm_config = prm_config.and_then(|p| {
-            Some(pep::PrmConfig {
-                resource: p.resource.clone(),
-                authorization_servers: p.authorization_servers.clone(),
-                jwks_uri: p.jwks_uri.clone(),
-                scopes_supported: p.scopes_supported.clone(),
-                bearer_methods_supported: p.bearer_methods_supported.clone(),
-                resource_signing_alg_values_supported: p
-                    .resource_signing_alg_values_supported
-                    .clone(),
-                resource_name: p.resource_name.clone(),
-                resource_documentation: p.resource_documentation.clone(),
-                resource_policy_uri: p.resource_policy_uri.clone(),
-                resource_tos_uri: p.resource_tos_uri.clone(),
-            })
+        let pep_prm_config = prm_config.map(|p| pep::PrmConfig {
+            resource: p.resource.clone(),
+            authorization_servers: p.authorization_servers.clone(),
+            jwks_uri: p.jwks_uri.clone(),
+            scopes_supported: p.scopes_supported.clone(),
+            bearer_methods_supported: p.bearer_methods_supported.clone(),
+            resource_signing_alg_values_supported: p.resource_signing_alg_values_supported.clone(),
+            resource_name: p.resource_name.clone(),
+            resource_documentation: p.resource_documentation.clone(),
+            resource_policy_uri: p.resource_policy_uri.clone(),
+            resource_tos_uri: p.resource_tos_uri.clone(),
         });
 
         let app_state = AppState {
@@ -280,19 +276,16 @@ pub async fn handle_sse(
     debug!("Setting up SSE connection");
 
     // Generate or use provided connection ID - use UUID format like Python server
-    let connection_id = params
-        .get("session_id")
-        .map(|s| s.clone())
-        .unwrap_or_else(|| {
-            // Generate a simple session ID
-            format!(
-                "session_{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            )
-        });
+    let connection_id = params.get("session_id").cloned().unwrap_or_else(|| {
+        // Generate a simple session ID
+        format!(
+            "session_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        )
+    });
 
     debug!("Created new session with ID: {}", connection_id);
 
@@ -330,8 +323,7 @@ pub async fn handle_sse(
     debug!("Yielding read and write streams");
 
     // Create a stream and return SSE response with custom headers
-    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
-        .map(|event| Ok::<_, Infallible>(event));
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(Ok::<_, Infallible>);
 
     // Return SSE response with session_id header - this is critical for rmcp
     let headers = [
@@ -1262,18 +1254,15 @@ pub async fn handle_multi_sse(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let session_id = params
-        .get("session_id")
-        .map(|s| s.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "session_{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            )
-        });
+    let session_id = params.get("session_id").cloned().unwrap_or_else(|| {
+        format!(
+            "session_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        )
+    });
 
     let session_key = format!("{}:{}", api_name, session_id);
     info!(
@@ -1308,7 +1297,7 @@ pub async fn handle_multi_sse(
     // in rmcp because it tries to parse the data as JSON-RPC.
 
     // Create the stream
-    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(|event| Ok(event));
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(Ok);
 
     // Set headers for SSE - match the single-config version format
     let mut headers = axum::http::HeaderMap::new();
@@ -1695,18 +1684,15 @@ pub async fn handle_dedicated_sse(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let session_id = params
-        .get("session_id")
-        .map(|s| s.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "session_{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            )
-        });
+    let session_id = params.get("session_id").cloned().unwrap_or_else(|| {
+        format!(
+            "session_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        )
+    });
 
     let session_key = format!("{}:{}", state.api_name, session_id);
     info!(
@@ -1740,7 +1726,7 @@ pub async fn handle_dedicated_sse(
     }
 
     // Create the stream
-    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(|event| Ok(event));
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(Ok);
 
     // Set headers for SSE
     let mut headers = axum::http::HeaderMap::new();

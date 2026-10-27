@@ -873,12 +873,11 @@ impl McpServer {
             let param_name = param.name.clone();
 
             // Extract type from schema
-            let param_type =
-                if let Some(schema_type) = param.schema.get("type").and_then(|t| t.as_str()) {
-                    schema_type
-                } else {
-                    "string" // default to string
-                };
+            let param_type = param
+                .schema
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("string");
 
             let param_schema = match param_type {
                 "string" => serde_json::json!({"type": "string"}),

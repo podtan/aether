@@ -55,7 +55,7 @@ impl PkceParams {
         let mut hasher = Sha256::new();
         hasher.update(code_verifier.as_bytes());
         let hash = hasher.finalize();
-        let code_challenge = URL_SAFE_NO_PAD.encode(&hash);
+        let code_challenge = URL_SAFE_NO_PAD.encode(hash);
 
         Self {
             code_verifier,
@@ -244,7 +244,7 @@ async fn oidc_login(State(app_state): State<AppState>, session: Session) -> impl
             "Redirecting to OIDC authorization URL with PKCE: {}",
             url_with_pkce
         );
-        Redirect::to(&url_with_pkce.to_string())
+        Redirect::to(url_with_pkce.as_ref())
     } else {
         // OIDC client not available, redirect with error
         redirect_to_path("/login?error=oidc_not_configured")
@@ -469,6 +469,8 @@ async fn logout(session: Session) -> Redirect {
 }
 
 /// Check if user has admin role
+// Kept: role-check helper for the admin surface (no current caller).
+#[allow(dead_code)]
 pub fn is_admin(user: &UserInfo) -> bool {
     user.role == UserRole::Admin
 }

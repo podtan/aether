@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     println!("🔍 Debug: About to call client_info.serve(transport)...");
-    let client = match client_info.serve(transport).await {
+    let _client = match client_info.serve(transport).await {
         Ok(c) => {
             println!("✅ Debug: Successfully created client service!");
             c
