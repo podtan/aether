@@ -45,10 +45,10 @@ cargo build
 ```bash
 # Generate config from OpenAPI spec
 ./target/release/aether-cli generate-config \
-  --input examples/configs/example/openapi.yaml \
+  --input examples/configs/jsonplaceholder/openapi.yaml \
   --output generated-config.yaml \
-  --api-name example \
-  --base-url "https://api.example.com/api/serviceCall"
+  --api-name jsonplaceholder \
+  --base-url "https://jsonplaceholder.typicode.com"
 ```
 
 ### Test Commands
@@ -215,11 +215,11 @@ local_dev_mode = false  # Set true to bypass OIDC
 ```
 
 ### Environment Variables
-Load from `.env` file (see `.env.example` for Example API example):
+Load from `.env` file (see `.env.example` for examples):
 ```bash
 # Common patterns
-EXAMPLE_VAR=xxx          # Auto-detected by CLI
-EXAMPLE_VAR=yyy                     # Referenced as ${EXAMPLE_VAR}
+EXAMPLE_API_KEY=xxx              # Auto-detected by CLI
+EXAMPLE_TOKEN=yyy                # Referenced as ${EXAMPLE_TOKEN}
 AETHER_LOG_LEVEL=debug
 ```
 
@@ -302,4 +302,4 @@ For testing with MCP clients like Claude Desktop:
 When both `openapi_spec` and `enhanced_tools` are present, server prefers `enhanced_tools` for performance. Use CLI to generate enhanced tools from OpenAPI specs.
 
 ### Environment Variable Substitution
-Variables like `${EXAMPLE_VAR}` in config are resolved at runtime from environment. CLI detects these patterns and marks parameters as `source: server`.
+Variables like `${EXAMPLE_TOKEN}` in config are resolved at runtime from environment. CLI detects these patterns and marks parameters as `source: server`.

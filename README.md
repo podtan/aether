@@ -186,10 +186,10 @@ cargo build --release --bin aether-cli
 
 # Generate config from OpenAPI spec
 ./target/release/aether-cli generate-config \
-  --input examples/openapi/example-openapi.yaml \
+  --input examples/configs/jsonplaceholder/openapi.yaml \
   --output generated-config.yaml \
-  --api-name example \
-  --base-url "https://api.example.com/api/serviceCall"
+  --api-name jsonplaceholder \
+  --base-url "https://jsonplaceholder.typicode.com"
 ```
 
 ### Two-Phase Architecture
@@ -218,17 +218,17 @@ cargo build --release --bin aether-cli
 
 ```yaml
 apis:
-  example:
-    base_url: "https://api.example.com/api/serviceCall"
+  myapi:
+    base_url: "https://api.example.com"
     openapi_spec: ""  # Not needed - data is in enhanced_tools
     timeout: 30
 
 enhanced_tools:
-  example_toolBalance:
+  myapi_getBalance:
     parameters:
     - name: api_key
       source: server      # Auto-filled from environment
-      env_var: EXAMPLE_VAR
+      env_var: EXAMPLE_API_KEY
 ```
 
 **Parameter Source Intelligence**: Automatically detects which parameters should be server-managed:
