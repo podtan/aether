@@ -46,7 +46,7 @@ public_health = true         # Keep /health endpoint public
 # Pinned Tools Configuration
 # When set, tools/list returns only pinned tools + search tools per API
 # When empty (default), all tools are returned (current behavior)
-# pinned_tools = ["pdt_getAsset", "pdt_createAsset", "example_toolEmployees"]
+# pinned_tools = ["pdt_getAsset", "pdt_createAsset", "myapi_listEmployees"]
 
 # API configurations remain the same
 [apis]

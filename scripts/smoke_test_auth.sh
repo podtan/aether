@@ -100,8 +100,8 @@ else
 fi
 
 # Test 7: Multi-config endpoints (if available)
-echo -n "Test 7: Multi-config /example/sse without token... "
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$MCP_URL/example/sse" 2>/dev/null || echo "000")
+echo -n "Test 7: Multi-config /myapi/sse without token... "
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$MCP_URL/myapi/sse" 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "404" ]; then
     echo -e "${YELLOW}SKIP${NC} (Multi-config mode not available)"
 elif [ "$HTTP_CODE" = "401" ]; then
