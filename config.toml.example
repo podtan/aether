@@ -41,7 +41,7 @@ public_health = true         # Keep /health endpoint public
 # issuer_url = "https://auth.example.com"
 
 # IMPORTANT: When enabled=true, you must also configure [oidc] section above
-# See docs/oauth2/CLIENTS.md for setup instructions
+# Setup: create OAuth2 clients per your IdP (see scripts/create_oauth2_clients.sh)
 
 # Pinned Tools Configuration
 # When set, tools/list returns only pinned tools + search tools per API
