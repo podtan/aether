@@ -503,3 +503,127 @@ mod query_array_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod instance_header_tests {
+    use super::*;
+
+    fn instance_header_operation() -> Operation {
+        Operation {
+            operation_id: "update_content".to_string(),
+            path: "/identities/{id}/content".to_string(),
+            method: "PATCH".to_string(),
+            summary: String::new(),
+            description: String::new(),
+            parameters: vec![aether_config::openapi::Parameter {
+                name: "X-Instance-Id".to_string(),
+                param_type: "header".to_string(),
+                required: true,
+                schema: serde_json::json!({"type": "string"}),
+            }],
+        }
+    }
+
+    fn operation_without_instance_header() -> Operation {
+        Operation {
+            parameters: vec![],
+            ..instance_header_operation()
+        }
+    }
+
+    /// Instance-MOUNTED bridge + caller-supplied instance header: build_request
+    /// applies the caller's header arg first, then execute_operation injects
+    /// the mount's own `request.header("X-Instance-Id", id)` — reqwest's
+    /// `header()` is append-semantics, so the built request carries BOTH
+    /// values in insertion order: caller first, mount second. First-wins
+    /// readers (hyper/axum HeaderMap::get) see the caller value; last-wins
+    /// readers see the mount value. Pin that wire order — a reqwest upgrade
+    /// flipping to insert/replace semantics, or a reorder of the injection
+    /// relative to build_request, must fail here instead of silently changing
+    /// which instance scope a backend resolves.
+    #[test]
+    fn duplicate_instance_header_preserves_caller_then_mount_order() {
+        let client = ApiClient::new("http://127.0.0.1:1".to_string(), None).expect("client");
+        let mut parameters = HashMap::new();
+        parameters.insert(
+            "X-Instance-Id".to_string(),
+            serde_json::json!("caller-instance"),
+        );
+
+        let operation = instance_header_operation();
+        let request = client
+            .build_request(&operation, &parameters)
+            .expect("build request");
+
+        // The mount injection, exactly as execute_operation performs it:
+        let request = request.header("X-Instance-Id", "mount-instance");
+
+        let built = request.build().expect("build request");
+        let values: Vec<_> = built.headers().get_all("x-instance-id").iter().collect();
+        assert_eq!(
+            values.len(),
+            2,
+            "caller arg + mount injection must both survive (append semantics)"
+        );
+        assert_eq!(
+            values[0].to_str().expect("utf-8 header value"),
+            "caller-instance",
+            "caller-supplied value must come FIRST on the wire"
+        );
+        assert_eq!(
+            values[1].to_str().expect("utf-8 header value"),
+            "mount-instance",
+            "mount-injected value must come SECOND on the wire"
+        );
+    }
+
+    /// Instance-LESS bridge (no mount instance id) + caller-supplied instance
+    /// header: NO injection happens (`if let Some(id) = instance_id` skips),
+    /// so the request carries exactly ONE instance header — the caller's.
+    /// This is the shape that forwards caller intent verbatim; a stray
+    /// default-value injection here would silently re-scope every call.
+    #[test]
+    fn instance_less_mount_forwards_caller_header_uninjected() {
+        let client = ApiClient::new("http://127.0.0.1:1".to_string(), None).expect("client");
+        let mut parameters = HashMap::new();
+        parameters.insert(
+            "X-Instance-Id".to_string(),
+            serde_json::json!("caller-instance"),
+        );
+
+        let operation = instance_header_operation();
+        let request = client
+            .build_request(&operation, &parameters)
+            .expect("build request");
+        // No injection: instance_id is None for an instance-less mount.
+
+        let built = request.build().expect("build request");
+        let values: Vec<_> = built.headers().get_all("x-instance-id").iter().collect();
+        assert_eq!(values.len(), 1, "no mount id — exactly the caller's header");
+        assert_eq!(
+            values[0].to_str().expect("utf-8 header value"),
+            "caller-instance"
+        );
+    }
+
+    /// Instance-MOUNTED bridge, caller passes no instance header: the single
+    /// X-Instance-Id on the wire is the mount's — the canonical scoped path.
+    #[test]
+    fn mount_injection_alone_yields_single_header() {
+        let client = ApiClient::new("http://127.0.0.1:1".to_string(), None).expect("client");
+
+        let operation = operation_without_instance_header();
+        let request = client
+            .build_request(&operation, &HashMap::new())
+            .expect("build request");
+        let request = request.header("X-Instance-Id", "mount-instance");
+
+        let built = request.build().expect("build request");
+        let values: Vec<_> = built.headers().get_all("x-instance-id").iter().collect();
+        assert_eq!(values.len(), 1, "mount injection alone — single header");
+        assert_eq!(
+            values[0].to_str().expect("utf-8 header value"),
+            "mount-instance"
+        );
+    }
+}
