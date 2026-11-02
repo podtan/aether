@@ -1,11 +1,10 @@
 use aether_auth::oidc::UserClaims;
-use aether_config::{AetherConfig, McpAuthConfig, OidcConfig};
+use aether_config::{McpAuthConfig, OidcConfig};
 use aether_mcp::middleware::{mcp_auth_middleware, AuthMiddlewareState};
 use axum::{
     body::Body,
-    extract::State,
     http::{header, Request, StatusCode},
-    middleware::{from_fn_with_state, Next},
+    middleware::from_fn_with_state,
     response::Response,
     routing::get,
     Router,
@@ -156,7 +155,7 @@ async fn test_auth_enabled_valid_token() {
         audience: None,
     };
 
-    let oidc_config = OidcConfig {
+    let _oidc_config = OidcConfig {
         provider: "test".to_string(),
         issuer_url: mock_server.uri(),
         client_id: "test_client".to_string(),
@@ -208,7 +207,7 @@ async fn test_auth_enabled_invalid_token() {
         audience: None,
     };
 
-    let oidc_config = OidcConfig {
+    let _oidc_config = OidcConfig {
         provider: "test".to_string(),
         issuer_url: mock_server.uri(),
         client_id: "test_client".to_string(),
@@ -249,7 +248,7 @@ async fn test_auth_required_missing_token() {
         audience: None,
     };
 
-    let oidc_config = OidcConfig {
+    let _oidc_config = OidcConfig {
         provider: "test".to_string(),
         issuer_url: mock_server.uri(),
         client_id: "test_client".to_string(),
@@ -286,7 +285,7 @@ async fn test_auth_optional_missing_token() {
         audience: None,
     };
 
-    let oidc_config = OidcConfig {
+    let _oidc_config = OidcConfig {
         provider: "test".to_string(),
         issuer_url: mock_server.uri(),
         client_id: "test_client".to_string(),
@@ -323,7 +322,7 @@ async fn test_invalid_bearer_format() {
         audience: None,
     };
 
-    let oidc_config = OidcConfig {
+    let _oidc_config = OidcConfig {
         provider: "test".to_string(),
         issuer_url: mock_server.uri(),
         client_id: "test_client".to_string(),
@@ -377,7 +376,7 @@ async fn test_user_claims_attached_to_request() {
         audience: None,
     };
 
-    let oidc_config = OidcConfig {
+    let _oidc_config = OidcConfig {
         provider: "test".to_string(),
         issuer_url: mock_server.uri(),
         client_id: "test_client".to_string(),

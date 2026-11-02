@@ -3,12 +3,14 @@ use aether_config::AetherConfig;
 #[tokio::test]
 async fn test_router_creation_with_mcp_client() {
     // Create minimal config
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret".to_string(),
-        cookie_name: "test_session".to_string(),
-        max_age: 3600,
-    });
+    let config = AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret".to_string(),
+            cookie_name: "test_session".to_string(),
+            max_age: 3600,
+        }),
+        ..AetherConfig::default()
+    };
 
     // Should be able to create router without OIDC config (will use dev mode)
     let router = crate::create_router_with_mcp_client(&config, "http://localhost:9000").await;
@@ -52,44 +54,46 @@ async fn test_dev_mode_config_with_mcp_client() {
 }
 
 fn create_full_test_config() -> AetherConfig {
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret_key_for_testing".to_string(),
-        cookie_name: "aether_test_session".to_string(),
-        max_age: 28800, // 8 hours
-    });
-    config.oidc = Some(aether_config::OidcConfig {
-        provider: "kanidm".to_string(),
-        issuer_url: "https://auth.example.com".to_string(),
-        client_id: "aether-web".to_string(),
-        client_secret: "test-secret".to_string(),
-        redirect_url: "http://localhost:8080/auth/callback".to_string(),
-        code_challenge_method: "S256".to_string(),
-        scope: "openid email profile".to_string(),
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: false, // OIDC mode
-        local_dev_email: "dev@example.com".to_string(),
-        local_dev_role: "user".to_string(),
-        local_dev_name: "Dev User".to_string(),
-    });
-    config
+    AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret_key_for_testing".to_string(),
+            cookie_name: "aether_test_session".to_string(),
+            max_age: 28800, // 8 hours
+        }),
+        oidc: Some(aether_config::OidcConfig {
+            provider: "kanidm".to_string(),
+            issuer_url: "https://auth.example.com".to_string(),
+            client_id: "aether-web".to_string(),
+            client_secret: "test-secret".to_string(),
+            redirect_url: "http://localhost:8080/auth/callback".to_string(),
+            code_challenge_method: "S256".to_string(),
+            scope: "openid email profile".to_string(),
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: false, // OIDC mode
+            local_dev_email: "dev@example.com".to_string(),
+            local_dev_role: "user".to_string(),
+            local_dev_name: "Dev User".to_string(),
+        }),
+        ..AetherConfig::default()
+    }
 }
 
 fn create_dev_mode_config() -> AetherConfig {
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "dev_secret_key".to_string(),
-        cookie_name: "aether_dev_session".to_string(),
-        max_age: 3600, // 1 hour for dev
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: true, // Dev mode enabled
-        local_dev_email: "admin@localhost".to_string(),
-        local_dev_role: "admin".to_string(),
-        local_dev_name: "Local Admin".to_string(),
-    });
-    config
+    AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "dev_secret_key".to_string(),
+            cookie_name: "aether_dev_session".to_string(),
+            max_age: 3600, // 1 hour for dev
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: true, // Dev mode enabled
+            local_dev_email: "admin@localhost".to_string(),
+            local_dev_role: "admin".to_string(),
+            local_dev_name: "Local Admin".to_string(),
+        }),
+        ..AetherConfig::default()
+    }
 }
 
 #[tokio::test]
@@ -156,27 +160,27 @@ async fn test_apis_template_with_runtime_apis() {
     use askama::Template;
 
     // Test ApiListTemplate with both uploaded and runtime APIs
-    let mut configs = Vec::new();
-
-    // Add a simulated uploaded API
-    configs.push(crate::ConfigInfo {
-        api_name: "uploaded-api".to_string(),
-        openapi_content: "{}".to_string(),
-        config_content: "{}".to_string(),
-        base_url: "https://api.example.com".to_string(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-    });
-
-    // Add a simulated runtime API (these would normally be added by the runtime callback)
-    configs.push(crate::ConfigInfo {
-        api_name: "runtime-api".to_string(),
-        openapi_content: "".to_string(), // Runtime APIs have minimal info
-        config_content: "".to_string(),
-        base_url: "".to_string(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-    });
+    let configs = vec![
+        // A simulated uploaded API
+        crate::ConfigInfo {
+            api_name: "uploaded-api".to_string(),
+            openapi_content: "{}".to_string(),
+            config_content: "{}".to_string(),
+            base_url: "https://api.example.com".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        },
+        // A simulated runtime API (these would normally be added by the
+        // runtime callback)
+        crate::ConfigInfo {
+            api_name: "runtime-api".to_string(),
+            openapi_content: "".to_string(), // Runtime APIs have minimal info
+            config_content: "".to_string(),
+            base_url: "".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        },
+    ];
 
     let template = crate::ApiListTemplate::new_standalone(configs, None);
 
@@ -297,18 +301,20 @@ async fn test_login_redirect_no_loop() {
     use tower::ServiceExt; // For oneshot
 
     // Create minimal config for testing
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret_for_redirect_test".to_string(),
-        cookie_name: "test_session".to_string(),
-        max_age: 3600,
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: true,
-        local_dev_email: "test@example.com".to_string(),
-        local_dev_role: "user".to_string(),
-        local_dev_name: "Test User".to_string(),
-    });
+    let config = AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret_for_redirect_test".to_string(),
+            cookie_name: "test_session".to_string(),
+            max_age: 3600,
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: true,
+            local_dev_email: "test@example.com".to_string(),
+            local_dev_role: "user".to_string(),
+            local_dev_name: "Test User".to_string(),
+        }),
+        ..AetherConfig::default()
+    };
 
     // Create router with MCP client
     let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000")
@@ -349,18 +355,20 @@ async fn test_auth_login_returns_page() {
     use tower::ServiceExt; // For oneshot
 
     // Create minimal config for testing
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret_for_auth_test".to_string(),
-        cookie_name: "test_session".to_string(),
-        max_age: 3600,
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: true,
-        local_dev_email: "test@example.com".to_string(),
-        local_dev_role: "user".to_string(),
-        local_dev_name: "Test User".to_string(),
-    });
+    let config = AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret_for_auth_test".to_string(),
+            cookie_name: "test_session".to_string(),
+            max_age: 3600,
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: true,
+            local_dev_email: "test@example.com".to_string(),
+            local_dev_role: "user".to_string(),
+            local_dev_name: "Test User".to_string(),
+        }),
+        ..AetherConfig::default()
+    };
 
     // Create router with MCP client
     let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000")
@@ -402,18 +410,20 @@ async fn test_oidc_callback_error_scenarios() {
     use tower::ServiceExt; // For oneshot
 
     // Create minimal config for testing with OIDC disabled (dev mode)
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret_for_callback_test".to_string(),
-        cookie_name: "test_session".to_string(),
-        max_age: 3600,
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: true, // This disables OIDC client creation
-        local_dev_email: "test@example.com".to_string(),
-        local_dev_role: "user".to_string(),
-        local_dev_name: "Test User".to_string(),
-    });
+    let config = AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret_for_callback_test".to_string(),
+            cookie_name: "test_session".to_string(),
+            max_age: 3600,
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: true, // This disables OIDC client creation
+            local_dev_email: "test@example.com".to_string(),
+            local_dev_role: "user".to_string(),
+            local_dev_name: "Test User".to_string(),
+        }),
+        ..AetherConfig::default()
+    };
 
     // Create router with MCP client
     let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000")
@@ -456,18 +466,20 @@ async fn test_oidc_callback_missing_parameters() {
     use tower::ServiceExt; // For oneshot
 
     // Create minimal config for testing with OIDC disabled (dev mode)
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret_for_missing_params_test".to_string(),
-        cookie_name: "test_session".to_string(),
-        max_age: 3600,
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: true,
-        local_dev_email: "test@example.com".to_string(),
-        local_dev_role: "user".to_string(),
-        local_dev_name: "Test User".to_string(),
-    });
+    let config = AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret_for_missing_params_test".to_string(),
+            cookie_name: "test_session".to_string(),
+            max_age: 3600,
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: true,
+            local_dev_email: "test@example.com".to_string(),
+            local_dev_role: "user".to_string(),
+            local_dev_name: "Test User".to_string(),
+        }),
+        ..AetherConfig::default()
+    };
 
     // Create router with MCP client
     let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000")
@@ -498,18 +510,20 @@ async fn test_logout_clears_session() {
     use tower::ServiceExt; // For oneshot
 
     // Create minimal config for testing
-    let mut config = AetherConfig::default();
-    config.session = Some(aether_config::SessionConfig {
-        secret_key: "test_secret_for_logout_test".to_string(),
-        cookie_name: "test_session".to_string(),
-        max_age: 3600,
-    });
-    config.dev = Some(aether_config::DevConfig {
-        local_dev_mode: true,
-        local_dev_email: "test@example.com".to_string(),
-        local_dev_role: "user".to_string(),
-        local_dev_name: "Test User".to_string(),
-    });
+    let config = AetherConfig {
+        session: Some(aether_config::SessionConfig {
+            secret_key: "test_secret_for_logout_test".to_string(),
+            cookie_name: "test_session".to_string(),
+            max_age: 3600,
+        }),
+        dev: Some(aether_config::DevConfig {
+            local_dev_mode: true,
+            local_dev_email: "test@example.com".to_string(),
+            local_dev_role: "user".to_string(),
+            local_dev_name: "Test User".to_string(),
+        }),
+        ..AetherConfig::default()
+    };
 
     // Create router with MCP client
     let app = crate::create_router_with_mcp_client(&config, "http://localhost:9000")
