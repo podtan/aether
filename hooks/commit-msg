@@ -1,0 +1,6 @@
+#!/bin/sh
+# commit-msg hook — rejects commit messages that violate the scrub law.
+# Install once per clone: scripts/install-hooks.sh  (sets core.hooksPath=hooks)
+# CI is the enforced layer; this hook protects you before the push.
+root="$(git rev-parse --show-toplevel)" || exit 1
+exec "$root/scripts/scrub-guard.sh" msg "$1"

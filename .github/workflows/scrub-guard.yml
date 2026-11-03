@@ -1,0 +1,27 @@
+name: scrub-guard
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  scrub:
+    name: commit messages and blobs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute scan base
+        id: base
+        run: |
+          if [ -n "${{ github.event.before }}" ] && git cat-file -e "${{ github.event.before }}" 2>/dev/null; then
+            echo "sha=${{ github.event.before }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=$(git merge-base origin/main HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Scan new commits (messages + introduced blobs)
+        run: scripts/scrub-guard.sh range "${{ steps.base.outputs.sha }}" HEAD

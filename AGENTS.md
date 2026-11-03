@@ -303,3 +303,21 @@ When both `openapi_spec` and `enhanced_tools` are present, server prefers `enhan
 
 ### Environment Variable Substitution
 Variables like `${EXAMPLE_TOKEN}` in config are resolved at runtime from environment. CLI detects these patterns and marks parameters as `source: server`.
+
+## History Scrub Guard (mandatory)
+
+This is a public opensource repository. The scrub law: history must stay byte-clean — file contents AND commit messages. Never commit internal hostnames, references to the platform's operating company, or secrets. Internal deployment config lives in the deploy infra, never here; examples use `example.com` placeholders only. A scrub regression means history rewrite, which is a one-way door.
+
+`scripts/scrub-guard.sh` enforces this going forward:
+
+- `scripts/scrub-guard.sh msg <file>` — scans one commit message (the `commit-msg` hook entry point).
+- `scripts/scrub-guard.sh range <base> <head>` — scans every commit in the range: messages plus every blob those commits introduce. CI runs this on every push and pull request (`.github/workflows/scrub-guard.yml`) — the enforced layer.
+- `scripts/scrub-guard.sh full` — full audit over all refs (all messages + all blobs). Run before releases and after any history operation. Exits non-zero on ANY finding; findings must be zero before a release tag.
+
+The hook is not automatic on fresh clones — install it once per clone:
+
+```bash
+scripts/install-hooks.sh   # sets git config core.hooksPath=hooks (local config)
+```
+
+CI is the enforced layer; the hook protects you before the push. The deny list (internal hostname suffixes, operating-company references, well-known secret shapes) is assembled from fragments inside the script so the guard never becomes a finding of its own audit — do not inline those literals anywhere in this repository, including in scripts that scan for them.
